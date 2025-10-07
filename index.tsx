@@ -1132,7 +1132,7 @@ ${fragmentCode}
         setPromptActionLoading(action);
         setError('');
 
-        const content = action === 'random' 
+        const content = action === 'random'
             ? "Generate a single, short, and creative prompt for a GLSL shader effect. Examples: 'liquid mercury flowing over a sphere', 'holographic glitch effect', 'a shield made of swirling energy'. Return only the prompt text itself, no extra words or formatting."
             : `You are a creative assistant for a 3D artist. Take the following shader idea and enhance it, making it more descriptive, vivid, and inspiring, but keep it as a concise prompt. User's idea: "${prompt}". Return only the enhanced prompt text, without any introductory phrases.`;
         
@@ -1144,16 +1144,32 @@ ${fragmentCode}
                 const response = await ai.models.generateContent({
                     model: "gemini-2.5-flash",
                     contents: content,
+                    // Add temperature for more creative random prompts
+                    config: {
+                        temperature: action === 'random' ? 0.9 : undefined,
+                    }
                 });
                 resultText = response.text;
             } else { // Local LLM
                 if (localLlmStatus !== 'connected') {
                     throw new Error("Local LLM endpoint is not connected.");
                 }
+
+                const requestBody: any = {
+                    model: localLlmModel,
+                    prompt: content,
+                    stream: false
+                };
+                if (action === 'random') {
+                    // Add temperature for more creative random prompts
+                    // Note: The property might be 'temperature' or inside 'options' depending on the local server.
+                    requestBody.temperature = 0.9;
+                }
+
                 const response = await fetch(localLlmEndpoint, {
                      method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model: localLlmModel, prompt: content, stream: false })
+                    body: JSON.stringify(requestBody)
                 });
                 if (!response.ok) throw new Error(`Local LLM request failed: ${response.statusText}`);
                 const data = await response.json();
