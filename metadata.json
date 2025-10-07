@@ -1,0 +1,5 @@
+{
+  "name": "ShaderCraft AI",
+  "description": "An AI-powered in-browser 3D application for creating and testing Babylon.js shaders.",
+  "requestFramePermissions": []
+}
