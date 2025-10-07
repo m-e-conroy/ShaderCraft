@@ -521,7 +521,7 @@ input:checked + .slider:before {
     justify-content: space-between;
     align-items: center;
     border-bottom: 1px solid var(--border-color);
-    padding: 0 1rem; /* Align with panel content */
+    padding: 0 0.5rem 0 1rem; /* Align with panel content */
     flex-shrink: 0;
 }
 
@@ -546,6 +546,11 @@ input:checked + .slider:before {
 .tab-button.active {
   color: var(--primary-color);
   border-bottom-color: var(--primary-color);
+}
+
+.editor-actions {
+    display: flex;
+    gap: 0.5rem;
 }
 
 .button-format {
@@ -624,6 +629,69 @@ input:checked + .slider:before {
 .button-small .loader {
     width: 14px;
     height: 14px;
+}
+
+/* --- Refine Modal --- */
+.refine-modal-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.refine-modal {
+    background-color: var(--panel-bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    width: 90%;
+    max-width: 600px;
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+}
+
+.refine-modal h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    color: var(--text-color-light);
+}
+
+.refine-modal-content {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.code-snippet {
+    background-color: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.75rem;
+    max-height: 150px;
+    overflow-y: auto;
+    font-family: var(--font-family-mono);
+    font-size: 0.85rem;
+    white-space: pre-wrap; /* Allow long lines to wrap */
+}
+
+#refine-prompt-input {
+    min-height: 80px;
+    resize: vertical;
+}
+
+.refine-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
 }
 
 

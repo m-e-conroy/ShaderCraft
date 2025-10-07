@@ -37,8 +37,10 @@ void main(void) {
     vUV = uv;
     vPositionW = worldPosition.xyz;
 
-    // Pass the world-space normal to the fragment shader
-    vNormal = normalize(mat3(world) * normal);
+    // Transform normal to world space.
+    mat3 normalMatrix = mat3(world);
+    // Normalize the normal to ensure accurate lighting, especially if the mesh is scaled.
+    vNormal = normalize(normalMatrix * normal);
 }
 `.trim();
 
@@ -292,7 +294,11 @@ void main(void) {
     
     vUV = uv;
     vPositionW = worldPosition.xyz;
-    vNormal = normalize(mat3(world) * normal); // Normal is not re-calculated, but should be for accuracy
+    
+    // Transform normal to world space and normalize it.
+    // Note: for perfect accuracy with the wobbled position, the normal vector itself should be recalculated.
+    vec3 worldNormal = mat3(world) * normal;
+    vNormal = normalize(worldNormal);
 }`.trim(),
         fragment: `
 precision highp float;
@@ -323,6 +329,11 @@ interface SavedShader {
     name: string;
     vertex: string;
     fragment: string;
+}
+
+interface RefinementSelection {
+    code: string;
+    editor: 'vertex' | 'fragment';
 }
 
 // Function to safely parse JSON from localStorage
@@ -375,6 +386,13 @@ const App = () => {
     const [localLlmEndpoint, setLocalLlmEndpoint] = useState<string>(() => getInitialState('shadercraft_llm_endpoint', 'http://localhost:11434/api/generate'));
     const [localLlmModel, setLocalLlmModel] = useState<string>(() => getInitialState('shadercraft_llm_model', 'codellama'));
     const [localLlmStatus, setLocalLlmStatus] = useState<'unchecked' | 'connected' | 'error'>('unchecked');
+
+    // State for AI Refinement
+    const [hasSelection, setHasSelection] = useState<boolean>(false);
+    const [isRefining, setIsRefining] = useState<boolean>(false);
+    const [refineModalOpen, setRefineModalOpen] = useState<boolean>(false);
+    const [refinementPrompt, setRefinementPrompt] = useState<string>('');
+    const [refinementSelection, setRefinementSelection] = useState<RefinementSelection | null>(null);
 
     const babylonCanvas = useRef<HTMLCanvasElement | null>(null);
     const sceneRef = useRef<any>(null);
@@ -530,6 +548,72 @@ const App = () => {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+    };
+
+    const handleImportShader = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const text = e.target?.result as string;
+                if (!text) throw new Error("File is empty.");
+                
+                const importedData = JSON.parse(text);
+
+                // Validate the structure of the imported JSON
+                if (!importedData.name || typeof importedData.name !== 'string' ||
+                    !importedData.vertexShader || typeof importedData.vertexShader !== 'string' ||
+                    !importedData.fragmentShader || typeof importedData.fragmentShader !== 'string') {
+                    throw new Error("Invalid shader format. JSON must contain 'name', 'vertexShader', and 'fragmentShader' properties.");
+                }
+
+                const newShader: SavedShader = {
+                    name: importedData.name.trim(),
+                    vertex: importedData.vertexShader,
+                    fragment: importedData.fragmentShader,
+                };
+
+                const existingShaderIndex = savedShaders.findIndex(s => s.name === newShader.name);
+                let updatedShaders;
+
+                if (existingShaderIndex > -1) {
+                    // If a shader with the same name exists, ask for confirmation to overwrite
+                    if (!window.confirm(`A shader named "${newShader.name}" already exists. Do you want to overwrite it?`)) {
+                        return; // User canceled the overwrite
+                    }
+                    updatedShaders = [...savedShaders];
+                    updatedShaders[existingShaderIndex] = newShader;
+                } else {
+                    // Add the new shader to the list
+                    updatedShaders = [...savedShaders, newShader];
+                }
+
+                setSavedShaders(updatedShaders);
+                localStorage.setItem('shadercraft_shaders', JSON.stringify(updatedShaders));
+                
+                // Automatically select and load the newly imported shader for immediate use
+                setSelectedShader(newShader.name);
+                setVertexCode(newShader.vertex);
+                setFragmentCode(newShader.fragment);
+                
+                alert(`Shader "${newShader.name}" imported successfully!`);
+
+            } catch (err: any) {
+                console.error("Failed to import shader:", err);
+                setError(err instanceof Error ? err.message : "An unknown error occurred during import.");
+            } finally {
+                // Reset file input to allow re-uploading the same file if needed
+                event.target.value = '';
+            }
+        };
+
+        reader.onerror = () => {
+            setError("Failed to read the selected file.");
+        };
+
+        reader.readAsText(file);
     };
 
 
@@ -830,26 +914,33 @@ const App = () => {
     }, [postProcessingState]);
 
 
-    // Effect for initializing CodeMirror editors
+    // Effect for initializing CodeMirror editors and adding selection listener
     useEffect(() => {
-        if (vertexEditorContainer.current && !vertexCmRef.current) {
-            vertexCmRef.current = CodeMirror(vertexEditorContainer.current, {
-                value: vertexCode,
-                mode: 'x-shader/x-vertex',
-                theme: 'material-darker',
-                lineNumbers: true,
-            });
-            vertexCmRef.current.on('change', (cm: any) => setVertexCode(cm.getValue()));
-        }
-        if (fragmentEditorContainer.current && !fragmentCmRef.current) {
-            fragmentCmRef.current = CodeMirror(fragmentEditorContainer.current, {
-                value: fragmentCode,
-                mode: 'x-shader/x-fragment',
-                theme: 'material-darker',
-                lineNumbers: true,
-            });
-            fragmentCmRef.current.on('change', (cm: any) => setFragmentCode(cm.getValue()));
-        }
+        const setupEditor = (container: HTMLElement | null, value: string, mode: string, cmRef: React.MutableRefObject<any>, setCode: (code: string) => void) => {
+            if (container && !cmRef.current) {
+                const cm = CodeMirror(container, {
+                    value: value,
+                    mode: mode,
+                    theme: 'material-darker',
+                    lineNumbers: true,
+                });
+                cm.on('change', (instance: any) => setCode(instance.getValue()));
+                cm.on('cursorActivity', (instance: any) => {
+                    // This listener might fire for both editors, so we ensure hasSelection is true
+                    // if *either* has a selection. A more robust solution might track them separately.
+                    if (vertexCmRef.current?.somethingSelected() || fragmentCmRef.current?.somethingSelected()) {
+                         setHasSelection(true);
+                    } else {
+                         setHasSelection(false);
+                    }
+                });
+                cmRef.current = cm;
+            }
+        };
+
+        setupEditor(vertexEditorContainer.current, vertexCode, 'x-shader/x-vertex', vertexCmRef, setVertexCode);
+        setupEditor(fragmentEditorContainer.current, fragmentCode, 'x-shader/x-fragment', fragmentCmRef, setFragmentCode);
+
     }, []);
 
     // Sync state changes to CodeMirror editors
@@ -1055,6 +1146,94 @@ ${fragmentCode}
             } else {
                 sceneRef.current.debugLayer.show({ embedMode: true });
             }
+        }
+    };
+
+    const handleOpenRefineModal = () => {
+        const cm = activeTab === 'vertex' ? vertexCmRef.current : fragmentCmRef.current;
+        if (cm && cm.somethingSelected()) {
+            setRefinementSelection({
+                code: cm.getSelection(),
+                editor: activeTab
+            });
+            setRefinementPrompt(''); // Clear previous prompt
+            setRefineModalOpen(true);
+        }
+    };
+
+    const closeRefineModal = () => {
+        setRefineModalOpen(false);
+        setRefinementSelection(null);
+    };
+
+    const handleRefineCode = async () => {
+        if (!refinementSelection || !refinementPrompt) return;
+        setIsRefining(true);
+        setError('');
+
+        const fullShaderCode = refinementSelection.editor === 'vertex' ? vertexCode : fragmentCode;
+
+        const systemInstruction = `You are an expert GLSL code assistant. Your task is to rewrite a selected piece of GLSL code based on a user's instruction.
+IMPORTANT: You must return ONLY the raw, modified GLSL code snippet. Do not wrap it in markdown, do not add any comments that were not in the original selection unless requested, and do not add any explanatory text before or after the code.`;
+        
+        const userContent = `The user wants to modify a piece of code.
+Instruction: "${refinementPrompt}"
+
+This is the full ${refinementSelection.editor} shader for context:
+\`\`\`glsl
+${fullShaderCode}
+\`\`\`
+
+This is the specific snippet to modify:
+\`\`\`glsl
+${refinementSelection.code}
+\`\`\`
+`;
+        try {
+            let refinedCode: string;
+
+            if (llmProvider === 'gemini') {
+                const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+                const response = await ai.models.generateContent({
+                    model: "gemini-2.5-flash",
+                    contents: userContent,
+                    config: {
+                        systemInstruction: systemInstruction,
+                    },
+                });
+                refinedCode = response.text.trim();
+            } else {
+                if (localLlmStatus !== 'connected') {
+                    throw new Error("Local LLM endpoint is not connected.");
+                }
+                 const response = await fetch(localLlmEndpoint, {
+                     method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: localLlmModel, prompt: `${systemInstruction}\n\n${userContent}`, stream: false })
+                });
+                if (!response.ok) throw new Error(`Local LLM request failed: ${response.statusText}`);
+                const data = await response.json();
+                refinedCode = data.response || data.content || '';
+            }
+
+            if (!refinedCode) {
+                 throw new Error("AI returned an empty response.");
+            }
+            
+            // Replace the selection in the correct editor
+            const cm = refinementSelection.editor === 'vertex' ? vertexCmRef.current : fragmentCmRef.current;
+            if (cm) {
+                cm.replaceSelection(refinedCode);
+            }
+
+            closeRefineModal();
+
+        } catch (e: any) {
+            console.error("Refinement failed:", e);
+            setError(e instanceof Error ? e.message : "Failed to refine code.");
+            // Don't close the modal on error, so the user can try again
+        } finally {
+            setIsRefining(false);
         }
     };
     
@@ -1504,6 +1683,17 @@ ${fragmentCode}
                                             </select>
                                         </div>
                                         <div className="button-group">
+                                            <label htmlFor="import-shader-input" className="file-upload-button">
+                                                Import
+                                            </label>
+                                            <input
+                                                id="import-shader-input"
+                                                type="file"
+                                                accept=".json"
+                                                onChange={handleImportShader}
+                                                style={{ display: 'none' }}
+                                                aria-label="Import shader from a JSON file"
+                                            />
                                             <button onClick={handleExportShader} disabled={!selectedShader} className="button-secondary">
                                                 Export
                                             </button>
@@ -1575,9 +1765,14 @@ ${fragmentCode}
                                 Fragment Shader
                             </button>
                         </div>
-                        <button onClick={handleFormatCode} className="button-format" aria-label="Format active shader code">
-                            Format Code
-                        </button>
+                        <div className="editor-actions">
+                            <button onClick={handleOpenRefineModal} className="button-format" disabled={!hasSelection || isRefining || isLoading} aria-label="Refine selected code with AI">
+                                Refine with AI
+                            </button>
+                             <button onClick={handleFormatCode} className="button-format" aria-label="Format active shader code">
+                                Format Code
+                            </button>
+                        </div>
                     </div>
                     <div className="editor-content">
                         <div
@@ -1596,6 +1791,36 @@ ${fragmentCode}
             <footer className="app-footer" role="log" aria-live="assertive">
                 {error || "No errors."}
             </footer>
+
+            {refineModalOpen && (
+                <div className="refine-modal-backdrop" onClick={closeRefineModal}>
+                    <div className="refine-modal" onClick={(e) => e.stopPropagation()}>
+                        <h3>Refine Code with AI</h3>
+                        <div className="refine-modal-content">
+                            <div className="form-group">
+                                <label>Selected Code:</label>
+                                <pre className="code-snippet"><code>{refinementSelection?.code}</code></pre>
+                            </div>
+                            <div className="form-group">
+                                <label htmlFor="refine-prompt-input">How should the AI change it?</label>
+                                <textarea
+                                    id="refine-prompt-input"
+                                    value={refinementPrompt}
+                                    onChange={(e) => setRefinementPrompt(e.target.value)}
+                                    placeholder="e.g., 'make this pulse slower' or 'change the color to a fiery orange'"
+                                    aria-label="Enter your code refinement instructions here"
+                                />
+                            </div>
+                        </div>
+                        <div className="refine-modal-actions">
+                            <button onClick={closeRefineModal} className="button-secondary" disabled={isRefining}>Cancel</button>
+                            <button onClick={handleRefineCode} disabled={!refinementPrompt || isRefining}>
+                                {isRefining ? <span className="loader" /> : 'Refine'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
