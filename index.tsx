@@ -394,6 +394,9 @@ const App = () => {
     const [refinementPrompt, setRefinementPrompt] = useState<string>('');
     const [refinementSelection, setRefinementSelection] = useState<RefinementSelection | null>(null);
 
+    // State for Time Control
+    const [timeState, setTimeState] = useState({ playing: true, time: 0.0 });
+
     const babylonCanvas = useRef<HTMLCanvasElement | null>(null);
     const sceneRef = useRef<any>(null);
     const engineRef = useRef<any>(null);
@@ -402,6 +405,7 @@ const App = () => {
     const skyboxRef = useRef<any>(null);
     const ppPipelineRef = useRef<any>(null);
     const lightStateRef = useRef(lightState);
+    const timeStateRef = useRef(timeState);
     const prevSelectedMeshRef = useRef<string | undefined>(undefined);
 
     const vertexEditorContainer = useRef<HTMLDivElement | null>(null);
@@ -412,10 +416,15 @@ const App = () => {
     const dragItem = useRef<number | null>(null);
     const dragOverItem = useRef<number | null>(null);
 
-    // Keep refs in sync with the latest state to avoid stale closures in the render loop
+    // Keep refs in sync with the latest state to avoid stale closures
     useEffect(() => {
         lightStateRef.current = lightState;
     }, [lightState]);
+
+    useEffect(() => {
+        timeStateRef.current = timeState;
+    }, [timeState]);
+
 
     // Save LLM settings to localStorage
     useEffect(() => {
@@ -658,6 +667,30 @@ const App = () => {
 
     }, [vertexCode, fragmentCode]);
 
+    // Effect for time animation using requestAnimationFrame
+    useEffect(() => {
+        let animationFrameId: number;
+        let lastTime = performance.now();
+
+        const animate = (now: number) => {
+            if (timeStateRef.current.playing) {
+                const deltaTime = (now - lastTime) / 1000.0;
+                setTimeState(prev => ({
+                    ...prev,
+                    time: prev.time + deltaTime
+                }));
+            }
+            lastTime = now;
+            animationFrameId = requestAnimationFrame(animate);
+        };
+
+        animationFrameId = requestAnimationFrame(animate);
+
+        return () => {
+            cancelAnimationFrame(animationFrameId);
+        };
+    }, []); // This effect should only run once on mount
+
     // Effect for one-time Babylon scene setup
     useEffect(() => {
         if (!babylonCanvas.current) return;
@@ -679,14 +712,13 @@ const App = () => {
         );
         ppPipelineRef.current = defaultPipeline;
 
-        let time = 0;
         engine.runRenderLoop(() => {
             const material = scene.getMaterialByName("customShader");
             if (material && material.getClassName() === "ShaderMaterial") {
                 const ls = lightStateRef.current;
                 const lightVector = new BABYLON.Vector3(ls.direction.x, ls.direction.y, ls.direction.z);
                 
-                (material as any).setFloat("u_time", time);
+                (material as any).setFloat("u_time", timeStateRef.current.time);
                 material.setFloat("u_lightIntensity", ls.intensity);
                 material.setColor3("u_lightColor", BABYLON.Color3.FromHexString(ls.diffuse));
 
@@ -708,8 +740,6 @@ const App = () => {
                 } else {
                     material.setInt("u_hasEnvTexture", 0);
                 }
-
-                time += engine.getDeltaTime() / 1000;
             }
             scene.render();
         });
@@ -1323,6 +1353,20 @@ ${refinementSelection.code}
         }
     };
 
+    // --- Time Control Handlers ---
+    const handleTogglePlay = () => {
+        setTimeState(prev => ({ ...prev, playing: !prev.playing }));
+    };
+
+    const handleResetTime = () => {
+        setTimeState(prev => ({ ...prev, time: 0.0, playing: prev.playing }));
+    };
+
+    const handleTimeScrub = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const newTime = parseFloat(e.target.value);
+        setTimeState(prev => ({ ...prev, time: newTime }));
+    };
+
 
     return (
         <div className="app-container">
@@ -1747,6 +1791,29 @@ ${refinementSelection.code}
 
                 <section className="panel viewport-panel" aria-label="3D Viewport">
                     <canvas id="babylon-canvas" ref={babylonCanvas} touch-action="none" />
+                    <div className="time-control-panel">
+                        <button onClick={handleTogglePlay} className="time-control-button" aria-label={timeState.playing ? 'Pause' : 'Play'}>
+                            {timeState.playing ? (
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                            ) : (
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                            )}
+                        </button>
+                        <button onClick={handleResetTime} className="time-control-button" aria-label="Reset Time">
+                             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+                        </button>
+                        <span className="time-display">{timeState.time.toFixed(2)}s</span>
+                        <input
+                            type="range"
+                            min="0"
+                            max="60"
+                            step="0.01"
+                            value={timeState.time}
+                            onChange={handleTimeScrub}
+                            className="time-slider"
+                            aria-label="Time Slider"
+                        />
+                    </div>
                 </section>
 
                 <section className="panel editor-panel" aria-labelledby="editor-title">

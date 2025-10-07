@@ -117,6 +117,7 @@ body {
   padding: 0;
   border-radius: 8px;
   overflow: hidden; /* Ensures canvas corners are rounded */
+  position: relative; /* For positioning child elements like the time control */
 }
 
 #babylon-canvas {
@@ -507,6 +508,104 @@ input:checked + .slider:before {
     padding-left: 0;
     margin: 0;
 }
+
+/* --- Time Control Panel --- */
+.time-control-panel {
+    position: absolute;
+    bottom: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: rgba(30, 30, 30, 0.85);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    border-radius: 8px;
+    padding: 0.5rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    z-index: 10;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+}
+
+.time-control-button {
+    background: none;
+    border: none;
+    color: var(--text-color);
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.time-control-button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.time-control-button svg {
+    width: 20px;
+    height: 20px;
+    fill: currentColor;
+}
+
+.time-display {
+    font-family: var(--font-family-mono);
+    font-size: 0.9rem;
+    color: var(--text-color-light);
+    min-width: 55px;
+    text-align: center;
+    user-select: none;
+}
+
+.time-slider {
+    width: 200px;
+    margin: 0;
+    -webkit-appearance: none;
+    background: transparent;
+}
+.time-slider:focus {
+    outline: none;
+}
+/* Chrome, Safari, Opera */
+.time-slider::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 4px;
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+}
+.time-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    border: 2px solid var(--primary-color);
+    height: 16px;
+    width: 16px;
+    border-radius: 50%;
+    background: var(--bg-color);
+    cursor: pointer;
+    margin-top: -6px; /* Center thumb on track */
+}
+/* Firefox */
+.time-slider::-moz-range-track {
+    width: 100%;
+    height: 4px;
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+}
+.time-slider::-moz-range-thumb {
+    border: 2px solid var(--primary-color);
+    height: 16px;
+    width: 16px;
+    border-radius: 50%;
+    background: var(--bg-color);
+    cursor: pointer;
+}
+
 
 /* Editor Panel */
 .editor-panel {
