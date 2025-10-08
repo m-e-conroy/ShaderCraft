@@ -1,3 +1,4 @@
+
 /*
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -137,6 +138,64 @@ body {
 .form-group label {
   font-weight: 500;
 }
+
+.form-hint {
+    font-size: 0.8rem;
+    color: #aaaaaa;
+    margin-top: -0.5rem;
+    padding: 0 0.25rem;
+}
+
+.form-hint strong {
+    color: var(--text-color);
+    font-weight: 500;
+}
+
+.error-message-inline {
+    background-color: rgba(244, 71, 71, 0.1);
+    color: var(--error-color);
+    padding: 0.75rem;
+    border-radius: 4px;
+    font-family: var(--font-family-mono);
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    margin-top: 0.5rem;
+    border: 1px solid rgba(244, 71, 71, 0.4);
+    word-break: break-word;
+}
+
+.error-message-inline.structured-error {
+    font-family: var(--font-family);
+    white-space: normal;
+    text-align: left;
+}
+.structured-error > strong {
+    font-weight: 500;
+    color: var(--text-color-light);
+    display: block;
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+}
+.structured-error p {
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+    line-height: 1.4;
+}
+.structured-error ul {
+    list-style-position: outside;
+    padding-left: 1.25rem;
+    margin: 0;
+}
+.structured-error li {
+    font-size: 0.85rem;
+    margin-bottom: 0.35rem;
+    line-height: 1.4;
+}
+.structured-error li strong {
+    display: inline;
+    font-weight: 500;
+}
+
 
 input, textarea, select {
   width: 100%;
@@ -823,15 +882,31 @@ input:checked + .slider:before {
 }
 
 @media (max-width: 992px) {
+    body {
+        overflow-y: auto; /* On mobile, allow the entire page to scroll */
+    }
+    #root {
+        height: auto; /* Let the container grow with the content */
+    }
     .main-layout {
         grid-template-columns: 1fr;
         grid-template-rows: auto 50vh auto;
         height: auto;
+        /* Let the body handle scrolling, don't create an inner scroll container */
+        overflow-y: visible;
+        /* Don't grow to fill the viewport, size to content instead */
+        flex-grow: 0;
     }
     .panel {
         height: auto;
     }
     .editor-panel {
         min-height: 400px;
+    }
+    /* FIX: On mobile, expanded panels should size to their content, not grow to fill space,
+       preventing them from collapsing into thin lines. */
+    .collapsible-panel.is-expanded {
+        flex: 0 0 auto;
+        min-height: initial;
     }
 }

@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -382,10 +383,16 @@ const App = () => {
         chromaticAberration: { enabled: false, aberrationAmount: 30 },
     });
     const [selectedPreset, setSelectedPreset] = useState<string>('');
-    const [llmProvider, setLlmProvider] = useState<'gemini' | 'local'>(() => getInitialState('shadercraft_llm_provider', 'gemini'));
+    const [llmProvider, setLlmProvider] = useState<'gemini' | 'local' | 'lmstudio'>(() => getInitialState('shadercraft_llm_provider', 'gemini'));
     const [localLlmEndpoint, setLocalLlmEndpoint] = useState<string>(() => getInitialState('shadercraft_llm_endpoint', 'http://localhost:11434/api/generate'));
     const [localLlmModel, setLocalLlmModel] = useState<string>(() => getInitialState('shadercraft_llm_model', 'codellama'));
     const [localLlmStatus, setLocalLlmStatus] = useState<'unchecked' | 'connected' | 'error'>('unchecked');
+    const [lmStudioUrl, setLmStudioUrl] = useState<string>(() => getInitialState('shadercraft_lmstudio_url', 'http://192.168.68.56:1234'));
+    const [lmStudioStatus, setLmStudioStatus] = useState<'unchecked' | 'connected' | 'error'>('unchecked');
+    const [selectedLmStudioModel, setSelectedLmStudioModel] = useState<string>(() => getInitialState('shadercraft_lmstudio_model', ''));
+    const [lmStudioModels, setLmStudioModels] = useState<string[]>([]);
+    const [isFetchingLmStudioModels, setIsFetchingLmStudioModels] = useState<boolean>(false);
+
 
     // State for AI Refinement
     const [hasSelection, setHasSelection] = useState<boolean>(false);
@@ -396,6 +403,14 @@ const App = () => {
 
     // State for Time Control
     const [timeState, setTimeState] = useState({ playing: true, time: 0.0 });
+    
+    const LMSTUDIO_CONNECTION_ERROR_MESSAGE = `LM Studio connection failed ('Failed to fetch'). Common causes:
+1. CORS: Go to the server tab in LM Studio and check 'Enable CORS'.
+2. Server: Ensure the LM Studio server is running.
+3. URL: Verify the URL is correct and accessible from your browser.
+4. Firewall: Check for firewalls blocking the connection.`;
+    const LOCAL_LLM_CONNECTION_ERROR_MESSAGE = "Local LLM connection failed ('Failed to fetch').";
+
 
     const babylonCanvas = useRef<HTMLCanvasElement | null>(null);
     const sceneRef = useRef<any>(null);
@@ -431,9 +446,11 @@ const App = () => {
         localStorage.setItem('shadercraft_llm_provider', JSON.stringify(llmProvider));
         localStorage.setItem('shadercraft_llm_endpoint', JSON.stringify(localLlmEndpoint));
         localStorage.setItem('shadercraft_llm_model', JSON.stringify(localLlmModel));
-    }, [llmProvider, localLlmEndpoint, localLlmModel]);
+        localStorage.setItem('shadercraft_lmstudio_url', JSON.stringify(lmStudioUrl));
+        localStorage.setItem('shadercraft_lmstudio_model', JSON.stringify(selectedLmStudioModel));
+    }, [llmProvider, localLlmEndpoint, localLlmModel, lmStudioUrl, selectedLmStudioModel]);
 
-    // Test local LLM connection
+    // Test local LLM (Ollama) connection
     useEffect(() => {
         if (llmProvider !== 'local' || !localLlmEndpoint) {
             setLocalLlmStatus('unchecked');
@@ -469,10 +486,77 @@ const App = () => {
         };
     }, [localLlmEndpoint, llmProvider]);
 
+    const fetchLmStudioModels = useCallback(async () => {
+        if (!lmStudioUrl || llmProvider !== 'lmstudio') {
+            setLmStudioStatus('unchecked');
+            setLmStudioModels([]);
+            return;
+        }
+        
+        setIsFetchingLmStudioModels(true);
+        setLmStudioStatus('unchecked'); // Show as checking
+        setError(''); // Clear previous errors
+
+        try {
+            const url = new URL('/v1/models', lmStudioUrl).toString();
+            const response = await fetch(url, {
+                signal: AbortSignal.timeout(5000) // 5 second timeout
+            });
+            
+            if (!response.ok) throw new Error(`Server responded with status: ${response.status}`);
+
+            const data = await response.json();
+            const models = data.data?.map((model: any) => model.id) || [];
+            
+            if (models.length === 0) throw new Error("No models found on the server.");
+
+            setLmStudioModels(models);
+            setLmStudioStatus('connected');
+            
+            // If current selection is not valid, select the first model
+            const currentModel = getInitialState('shadercraft_lmstudio_model', '');
+            if (models.includes(currentModel)) {
+                setSelectedLmStudioModel(currentModel);
+            } else {
+                setSelectedLmStudioModel(models[0]);
+            }
+
+        } catch (err: any) {
+            console.error("LM Studio connection/fetch error:", err);
+            if (err instanceof TypeError && err.message === 'Failed to fetch') {
+                setError(LMSTUDIO_CONNECTION_ERROR_MESSAGE);
+            } else {
+                setError(err.message || 'An unknown error occurred while connecting to LM Studio.');
+            }
+            setLmStudioStatus('error');
+            setLmStudioModels([]);
+        } finally {
+            setIsFetchingLmStudioModels(false);
+        }
+    }, [lmStudioUrl, llmProvider]);
+
+    // Effect to auto-fetch LM Studio models when URL or provider changes
+    useEffect(() => {
+        if (llmProvider === 'lmstudio') {
+            const timeoutId = setTimeout(() => {
+                fetchLmStudioModels();
+            }, 500); // Debounce
+            return () => clearTimeout(timeoutId);
+        } else {
+             setLmStudioStatus('unchecked');
+             setLmStudioModels([]);
+        }
+    }, [lmStudioUrl, llmProvider, fetchLmStudioModels]);
+
     // Load saved shaders from localStorage on initial mount
     useEffect(() => {
         setSavedShaders(getInitialState('shadercraft_shaders', []));
     }, []);
+    
+    // Clear error message when switching AI provider
+    useEffect(() => {
+        setError('');
+    }, [llmProvider]);
 
     const handleSaveShader = () => {
         if (!shaderName.trim()) {
@@ -1017,10 +1101,25 @@ const App = () => {
         }
     };
     
-    // Extracts a JSON block from a string that might be wrapped in markdown
+    // Extracts a JSON block from a string that might be wrapped in markdown or have extraneous text.
     const extractJsonFromString = (str: string): string | null => {
-        const match = str.match(/```json\s*([\s\S]*?)\s*```|({[\s\S]*})/);
-        return match ? (match[1] || match[2]) : null;
+        // First, try to find a JSON block within markdown fences
+        const markdownMatch = str.match(/```json\s*([\s\S]*?)\s*```/);
+        if (markdownMatch && markdownMatch[1]) {
+            return markdownMatch[1].trim();
+        }
+
+        // If not found, look for the substring between the first '{' and the last '}'
+        // This is a robust way to handle extraneous text before or after the JSON object.
+        const firstBraceIndex = str.indexOf('{');
+        const lastBraceIndex = str.lastIndexOf('}');
+
+        if (firstBraceIndex !== -1 && lastBraceIndex > firstBraceIndex) {
+            return str.substring(firstBraceIndex, lastBraceIndex + 1).trim();
+        }
+        
+        // Return null if no JSON object could be extracted.
+        return null;
     };
 
 
@@ -1035,6 +1134,7 @@ const App = () => {
 
 Please provide the complete GLSL code for both the vertex and fragment shaders.
 
+- CRITICAL: DO NOT include the \`#version\` directive (e.g., \`#version 300 es\`) at the top of the shader code. Babylon.js handles this automatically.
 - The vertex shader MUST define \`gl_Position\`.
 - It will receive attributes: \`vec3 position\`, \`vec3 normal\`, \`vec2 uv\`.
 - It MUST pass a varying \`vUV\` (\`vec2\`), \`vNormal\` (\`vec3\`), and \`vPositionW\` (\`vec3\`) to the fragment shader.
@@ -1065,7 +1165,7 @@ ${fragmentCode}
 }`;
 
         try {
-            let jsonString: string | null = null;
+            let rawResponseText: string | null = null;
 
             if (llmProvider === 'gemini') {
                 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -1078,11 +1178,39 @@ ${fragmentCode}
                         responseSchema: SHADER_SCHEMA,
                     }
                 });
-                jsonString = response.text.trim();
+                rawResponseText = response.text.trim();
 
-            } else { // Local LLM provider
+            } else if (llmProvider === 'lmstudio') {
+                if (lmStudioStatus !== 'connected' || !selectedLmStudioModel) {
+                    throw new Error(LMSTUDIO_CONNECTION_ERROR_MESSAGE);
+                }
+                const url = new URL('/v1/chat/completions', lmStudioUrl).toString();
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: selectedLmStudioModel,
+                        messages: [
+                            { role: 'system', content: systemInstruction },
+                            { role: 'user', content: userContent }
+                        ],
+                        stream: false,
+                        response_format: { type: 'json_object' } // Request JSON output
+                    })
+                });
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`LM Studio request failed: ${response.statusText} - ${errorText}`);
+                }
+                const responseData = await response.json();
+                const content = responseData.choices?.[0]?.message?.content;
+                if (!content) {
+                    throw new Error("LM Studio returned an empty or invalid response structure.");
+                }
+                rawResponseText = content;
+            } else { // Local LLM (Ollama) provider
                 if (localLlmStatus !== 'connected') {
-                    throw new Error("Local LLM endpoint is not connected. Please check the URL.");
+                    throw new Error(LOCAL_LLM_CONNECTION_ERROR_MESSAGE);
                 }
                 const response = await fetch(localLlmEndpoint, {
                     method: 'POST',
@@ -1100,14 +1228,15 @@ ${fragmentCode}
                 const responseData = await response.json();
                 
                 // Response structure can vary (e.g., { response: "..." } for Ollama)
-                const content = responseData.response || responseData.content || JSON.stringify(responseData);
-                jsonString = extractJsonFromString(content) || content;
+                rawResponseText = responseData.response || responseData.content || JSON.stringify(responseData);
             }
 
-            if (!jsonString) {
+            if (!rawResponseText) {
                 throw new Error("AI response was empty or malformed.");
             }
 
+            // Centralized JSON extraction and parsing to handle responses wrapped in markdown
+            const jsonString = extractJsonFromString(rawResponseText) || rawResponseText;
             const shaderData = JSON.parse(jsonString);
 
             if (shaderData.vertexShader && shaderData.fragmentShader) {
@@ -1122,7 +1251,17 @@ ${fragmentCode}
 
         } catch (e: any) {
             console.error(e);
-            setError(e instanceof Error ? e.message : 'An unknown error occurred.');
+            if (e instanceof TypeError && e.message === 'Failed to fetch') {
+                 if (llmProvider === 'lmstudio') {
+                    setError(LMSTUDIO_CONNECTION_ERROR_MESSAGE);
+                } else {
+                    setError(LOCAL_LLM_CONNECTION_ERROR_MESSAGE);
+                }
+            } else {
+                // Prepend a user-friendly message to the technical error
+                const technicalError = e instanceof Error ? e.message : 'An unknown error occurred.';
+                setError(`Failed to generate shader. Error: ${technicalError}`);
+            }
         } finally {
             setIsLoading(false);
         }
@@ -1133,8 +1272,8 @@ ${fragmentCode}
         setError('');
 
         const content = action === 'random'
-            ? "Generate a single, short, and creative prompt for a GLSL shader effect. Examples: 'liquid mercury flowing over a sphere', 'holographic glitch effect', 'a shield made of swirling energy'. Return only the prompt text itself, no extra words or formatting."
-            : `You are a creative assistant for a 3D artist. Take the following shader idea and enhance it, making it more descriptive, vivid, and inspiring, but keep it as a concise prompt. User's idea: "${prompt}". Return only the enhanced prompt text, without any introductory phrases.`;
+            ? "Generate a single, short, and creative prompt for a GLSL shader effect. Examples: 'liquid mercury flowing over a sphere', 'holographic glitch effect', 'a shield made of swirling energy'. Return ONLY the raw text content for the prompt. Do not include any extra words, formatting, escaped symbols, or XML data."
+            : `You are a creative assistant for a 3D artist. Take the following shader idea and enhance it, making it more descriptive, vivid, and inspiring, but keep it as a concise prompt. User's idea: "${prompt}". Return ONLY the raw, enhanced prompt text. Do not include any introductory phrases, escaped symbols, or XML data.`;
         
         try {
             let resultText: string;
@@ -1150,9 +1289,33 @@ ${fragmentCode}
                     }
                 });
                 resultText = response.text;
-            } else { // Local LLM
+            } else if (llmProvider === 'lmstudio') {
+                if (lmStudioStatus !== 'connected' || !selectedLmStudioModel) {
+                    throw new Error(LMSTUDIO_CONNECTION_ERROR_MESSAGE);
+                }
+                const url = new URL('/v1/chat/completions', lmStudioUrl).toString();
+                const requestBody: any = {
+                    model: selectedLmStudioModel,
+                    messages: [{ role: 'user', content: content }],
+                    stream: false
+                };
+                if (action === 'random') {
+                    requestBody.temperature = 0.9;
+                }
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`LM Studio request failed: ${response.statusText} - ${errorText}`);
+                }
+                const data = await response.json();
+                resultText = data.choices?.[0]?.message?.content || '';
+            } else { // Local LLM (Ollama)
                 if (localLlmStatus !== 'connected') {
-                    throw new Error("Local LLM endpoint is not connected.");
+                    throw new Error(LOCAL_LLM_CONNECTION_ERROR_MESSAGE);
                 }
 
                 const requestBody: any = {
@@ -1179,7 +1342,15 @@ ${fragmentCode}
             setPrompt(resultText.trim().replace(/['"]+/g, '')); // Clean up quotes
         } catch (e: any) {
             console.error(e);
-            setError(e instanceof Error ? e.message : `Failed to ${action} prompt.`);
+            if (e instanceof TypeError && e.message === 'Failed to fetch') {
+                if (llmProvider === 'lmstudio') {
+                    setError(LMSTUDIO_CONNECTION_ERROR_MESSAGE);
+                } else {
+                     setError(LOCAL_LLM_CONNECTION_ERROR_MESSAGE);
+                }
+            } else {
+                setError(e instanceof Error ? e.message : `Failed to ${action} prompt.`);
+            }
         } finally {
             setPromptActionLoading(null);
         }
@@ -1248,9 +1419,37 @@ ${refinementSelection.code}
                     },
                 });
                 refinedCode = response.text.trim();
-            } else {
+            } else if (llmProvider === 'lmstudio') {
+                if (lmStudioStatus !== 'connected' || !selectedLmStudioModel) {
+                     throw new Error(LMSTUDIO_CONNECTION_ERROR_MESSAGE);
+                }
+                const url = new URL('/v1/chat/completions', lmStudioUrl).toString();
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: selectedLmStudioModel,
+                        messages: [
+                            { role: 'system', content: systemInstruction },
+                            { role: 'user', content: userContent }
+                        ],
+                        stream: false,
+                    })
+                });
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`LM Studio request failed: ${response.statusText} - ${errorText}`);
+                }
+                const data = await response.json();
+                const content = data.choices?.[0]?.message?.content || '';
+
+                // Defensively strip markdown in case the model adds it
+                const markdownMatch = content.match(/```(?:glsl)?\s*([\s\S]*?)\s*```/);
+                refinedCode = markdownMatch ? markdownMatch[1].trim() : content.trim();
+
+            } else { // Local LLM (Ollama)
                 if (localLlmStatus !== 'connected') {
-                    throw new Error("Local LLM endpoint is not connected.");
+                    throw new Error(LOCAL_LLM_CONNECTION_ERROR_MESSAGE);
                 }
                  const response = await fetch(localLlmEndpoint, {
                      method: 'POST',
@@ -1259,7 +1458,11 @@ ${refinementSelection.code}
                 });
                 if (!response.ok) throw new Error(`Local LLM request failed: ${response.statusText}`);
                 const data = await response.json();
-                refinedCode = data.response || data.content || '';
+                const rawResponse = data.response || data.content || '';
+                
+                // Also strip markdown for local models for consistency
+                const markdownMatch = rawResponse.match(/```(?:glsl)?\s*([\s\S]*?)\s*```/);
+                refinedCode = markdownMatch ? markdownMatch[1].trim() : rawResponse.trim();
             }
 
             if (!refinedCode) {
@@ -1276,7 +1479,15 @@ ${refinementSelection.code}
 
         } catch (e: any) {
             console.error("Refinement failed:", e);
-            setError(e instanceof Error ? e.message : "Failed to refine code.");
+             if (e instanceof TypeError && e.message === 'Failed to fetch') {
+                 if (llmProvider === 'lmstudio') {
+                    setError(LMSTUDIO_CONNECTION_ERROR_MESSAGE);
+                } else {
+                     setError(LOCAL_LLM_CONNECTION_ERROR_MESSAGE);
+                }
+            } else {
+                setError(e instanceof Error ? e.message : "Failed to refine code.");
+            }
             // Don't close the modal on error, so the user can try again
         } finally {
             setIsRefining(false);
@@ -1418,11 +1629,73 @@ ${refinementSelection.code}
                                             <select
                                                 id="llm-provider-select"
                                                 value={llmProvider}
-                                                onChange={(e) => setLlmProvider(e.target.value as 'gemini' | 'local')}
+                                                onChange={(e) => setLlmProvider(e.target.value as 'gemini' | 'local' | 'lmstudio')}
                                             >
                                                 <option value="gemini">Gemini API</option>
-                                                <option value="local">Local LLM</option>
+                                                <option value="lmstudio">LM Studio</option>
+                                                <option value="local">Local LLM (Ollama)</option>
                                             </select>
+                                        </div>
+
+                                        <div className={`effect-options ${llmProvider === 'lmstudio' ? 'visible' : ''}`}>
+                                            <div>
+                                                <div className="form-group">
+                                                    <label htmlFor="lmstudio-url">Server URL</label>
+                                                    <div className="input-with-status">
+                                                        <input
+                                                            id="lmstudio-url"
+                                                            type="text"
+                                                            value={lmStudioUrl}
+                                                            onChange={(e) => setLmStudioUrl(e.target.value)}
+                                                            placeholder="http://192.168.68.56:1234"
+                                                        />
+                                                        <span className={`connection-status ${lmStudioStatus}`} title={
+                                                            lmStudioStatus === 'connected' ? 'Connected' :
+                                                            lmStudioStatus === 'error' ? 'Connection Failed' : 'Checking...'
+                                                        }></span>
+                                                    </div>
+                                                </div>
+                                                <div className="form-group">
+                                                    <div className="prompt-label-group">
+                                                        <label htmlFor="lmstudio-model">Model</label>
+                                                        <button onClick={() => fetchLmStudioModels()} disabled={isFetchingLmStudioModels || !lmStudioUrl} className="button-small">
+                                                            {isFetchingLmStudioModels ? <span className="loader" /> : 'Refresh'}
+                                                        </button>
+                                                    </div>
+                                                    <select
+                                                        id="lmstudio-model"
+                                                        value={selectedLmStudioModel}
+                                                        onChange={(e) => setSelectedLmStudioModel(e.target.value)}
+                                                        disabled={isFetchingLmStudioModels || lmStudioModels.length === 0}
+                                                    >
+                                                        {isFetchingLmStudioModels && <option>Fetching models...</option>}
+                                                        {!isFetchingLmStudioModels && lmStudioStatus === 'error' && <option>Could not load models</option>}
+                                                        {!isFetchingLmStudioModels && lmStudioStatus === 'connected' && lmStudioModels.length === 0 && <option>No models found</option>}
+                                                        {lmStudioModels.map(model => (
+                                                            <option key={model} value={model}>{model}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <p className="form-hint">
+                                                    Connects to your LM Studio server. <strong>Note:</strong> You must check the "Enable CORS" box in the LM Studio server settings.
+                                                </p>
+                                                {llmProvider === 'lmstudio' && error && (
+                                                    error === LMSTUDIO_CONNECTION_ERROR_MESSAGE ? (
+                                                        <div className="error-message-inline structured-error">
+                                                            <strong>LM Studio Connection Failed</strong>
+                                                            <p>This is a network issue, most likely related to CORS. Please check the following:</p>
+                                                            <ul>
+                                                                <li>In the LM Studio app, go to the "Server" tab and <strong>check the "Enable CORS" box</strong>. This is the most common fix.</li>
+                                                                <li>Ensure the LM Studio server is running.</li>
+                                                                <li>Verify the Server URL above is correct.</li>
+                                                                <li>Check for firewalls blocking the connection.</li>
+                                                            </ul>
+                                                        </div>
+                                                    ) : (
+                                                        <pre className="error-message-inline">{error}</pre>
+                                                    )
+                                                )}
+                                            </div>
                                         </div>
                                         
                                         <div className={`effect-options ${llmProvider === 'local' ? 'visible' : ''}`}>
@@ -1453,6 +1726,24 @@ ${refinementSelection.code}
                                                         placeholder="e.g., codellama"
                                                     />
                                                 </div>
+                                                <p className="form-hint">
+                                                    Connects to your local LLM server (e.g., Ollama).
+                                                </p>
+                                                {llmProvider === 'local' && error && (
+                                                    error === LOCAL_LLM_CONNECTION_ERROR_MESSAGE ? (
+                                                        <div className="error-message-inline structured-error">
+                                                            <strong>Local LLM Connection Failed</strong>
+                                                            <p>This is a network issue. Please check the following:</p>
+                                                            <ul>
+                                                                <li>Is your local server (e.g., Ollama) running?</li>
+                                                                <li>Is the Endpoint URL above correct?</li>
+                                                                <li>Your server may need to be configured to allow requests from this web page (CORS).</li>
+                                                            </ul>
+                                                        </div>
+                                                    ) : (
+                                                        <pre className="error-message-inline">{error}</pre>
+                                                    )
+                                                )}
                                             </div>
                                         </div>
 
@@ -1476,20 +1767,18 @@ ${refinementSelection.code}
                                                 aria-label="Enter your shader description here"
                                             />
                                         </div>
-                                        {llmProvider === 'gemini' && (
-                                            <div className="form-group">
-                                                <label htmlFor="preset-select">Shader Presets</label>
-                                                <select 
-                                                    id="preset-select" 
-                                                    value={selectedPreset} 
-                                                    onChange={(e) => handlePresetChange(e.target.value)}
-                                                    aria-label="Select a shader preset"
-                                                >
-                                                    <option value="">-- Select a Preset --</option>
-                                                    {SHADER_PRESETS.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
-                                                </select>
-                                            </div>
-                                        )}
+                                        <div className="form-group">
+                                            <label htmlFor="preset-select">Shader Presets</label>
+                                            <select 
+                                                id="preset-select" 
+                                                value={selectedPreset} 
+                                                onChange={(e) => handlePresetChange(e.target.value)}
+                                                aria-label="Select a shader preset"
+                                            >
+                                                <option value="">-- Select a Preset --</option>
+                                                {SHADER_PRESETS.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
+                                            </select>
+                                        </div>
                                         <button onClick={handleGenerateShader} disabled={isLoading || !prompt}>
                                             {isLoading ? <span className="loader" /> : 'Generate with AI'}
                                         </button>
