@@ -1,4 +1,3 @@
-
 /*
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -194,6 +193,15 @@ body {
 .structured-error li strong {
     display: inline;
     font-weight: 500;
+}
+
+.structured-error a {
+    color: var(--primary-hover-color);
+    text-decoration: underline;
+}
+
+.structured-error a:hover {
+    color: var(--text-color-light);
 }
 
 

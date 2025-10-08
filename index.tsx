@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -50,31 +49,71 @@ precision highp float;
 
 // Varying
 varying vec2 vUV;
-varying vec3 vNormal; // World-space normal from vertex shader
-varying vec3 vPositionW; // World-space position from vertex shader
+varying vec3 vNormal;
+varying vec3 vPositionW;
 
 // Uniforms
 uniform float u_time;
+uniform vec3 u_cameraPosition;
+
+// Material Properties
+uniform vec3 u_albedo;
+uniform float u_metallic;
+uniform float u_roughness;
 
 // Lighting Uniforms
 uniform vec3 u_lightColor;
 uniform float u_lightIntensity;
-uniform int u_lightType; // 0: directional/hemispheric, 1: point
-uniform vec3 u_lightDirection; // For directional/hemispheric
-uniform vec3 u_lightPosition;  // For point light
+uniform int u_lightType; // 0: directional, 1: point
+uniform vec3 u_lightDirection;
+uniform vec3 u_lightPosition;
 
 // Environment/Reflection Uniforms
 uniform samplerCube u_envTexture;
-uniform vec3 u_cameraPosition;
-uniform int u_hasEnvTexture; // Use int as a boolean (0 or 1)
+uniform int u_hasEnvTexture;
 
+const float PI = 3.14159265359;
+
+// PBR Functions
+// 1. Normal Distribution Function (Trowbridge-Reitz GGX)
+float DistributionGGX(vec3 N, vec3 H, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float NdotH = max(dot(N, H), 0.0);
+    float NdotH2 = NdotH * NdotH;
+    float nom = a2;
+    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    denom = PI * denom * denom;
+    return nom / denom;
+}
+
+// 2. Geometry Function (Schlick-GGX)
+float GeometrySchlickGGX(float NdotV, float roughness) {
+    float r = (roughness + 1.0);
+    float k = (r * r) / 8.0;
+    float nom = NdotV;
+    float denom = NdotV * (1.0 - k) + k;
+    return nom / denom;
+}
+
+// Smith's method for Geometry
+float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
+    float NdotV = max(dot(N, V), 0.0);
+    float NdotL = max(dot(N, L), 0.0);
+    float ggx2 = GeometrySchlickGGX(NdotV, roughness);
+    float ggx1 = GeometrySchlickGGX(NdotL, roughness);
+    return ggx1 * ggx2;
+}
+
+// 3. Fresnel Equation (Schlick's approximation)
+vec3 fresnelSchlick(float cosTheta, vec3 F0) {
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
 
 void main(void) {
-    // Base object color pattern
-    vec3 objectColor = vec3(0.6 + 0.4 * sin(vUV.x * 20.0 + u_time), 0.6 + 0.4 * cos(vUV.y * 20.0 + u_time), 1.0);
-    
-    // --- Lighting Calculation ---
-    vec3 ambientColor = vec3(0.15, 0.15, 0.15);
+    // Input vectors
+    vec3 N = normalize(vNormal);
+    vec3 V = normalize(u_cameraPosition - vPositionW);
     
     vec3 lightDir;
     if (u_lightType == 0) { // Directional or Hemispheric
@@ -82,26 +121,52 @@ void main(void) {
     } else { // Point Light
         lightDir = normalize(u_lightPosition - vPositionW);
     }
+    vec3 L = lightDir;
+    vec3 H = normalize(V + L);
 
-    float diffuseFactor = max(0.0, dot(vNormal, lightDir));
-    vec3 diffuseColor = diffuseFactor * u_lightColor * u_lightIntensity;
-    vec3 litColor = objectColor * (ambientColor + diffuseColor);
+    // Base reflectivity at normal incidence (F0)
+    vec3 F0 = vec3(0.04);
+    F0 = mix(F0, u_albedo, u_metallic);
+
+    // Direct lighting calculation (Cook-Torrance BRDF)
+    float NDF = DistributionGGX(N, H, u_roughness);
+    float G = GeometrySmith(N, V, L, u_roughness);
+    vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+
+    vec3 kS = F;
+    vec3 kD = vec3(1.0) - kS;
+    kD *= (1.0 - u_metallic); // No diffuse for pure metals
+
+    // Specular term
+    vec3 numerator = NDF * G * F;
+    float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.001;
+    vec3 specular = numerator / denominator;
+
+    // Additive direct light contribution
+    float NdotL = max(dot(N, L), 0.0);
+    vec3 directLighting = (kD * u_albedo / PI + specular) * u_lightColor * u_lightIntensity * NdotL;
+
+    // Ambient lighting (a simple base)
+    vec3 ambient = (vec3(0.05) * u_albedo) * (1.0 - u_metallic);
     
-    vec3 finalColor = litColor;
+    vec3 litColor = directLighting + ambient;
 
     // --- Reflection Calculation ---
+    // Blend environment map reflections on top of the lit surface.
     if (u_hasEnvTexture == 1) {
         vec3 viewDir = normalize(vPositionW - u_cameraPosition);
-        // Use reflect on the view direction (from surface to eye)
-        vec3 reflectDir = reflect(viewDir, normalize(vNormal));
-        vec4 reflectionColor = textureCube(u_envTexture, reflectDir);
+        vec3 reflectDir = reflect(viewDir, N);
         
-        // Mix the lit color with the reflection color.
-        // The mix factor (0.75) is now controlled directly in the shader code.
-        finalColor = mix(litColor, reflectionColor.rgb, 0.75);
+        vec3 reflectionColor = textureCube(u_envTexture, reflectDir).rgb;
+
+        // Use the Fresnel term to determine the strength of the reflection
+        vec3 F_env = fresnelSchlick(max(dot(N, V), 0.0), F0);
+        
+        // A simple mix is not physically correct but gives good results.
+        litColor = mix(litColor, reflectionColor, F_env);
     }
 
-    gl_FragColor = vec4(finalColor, 1.0);
+    gl_FragColor = vec4(litColor, 1.0);
 }
 `.trim();
 
@@ -121,215 +186,22 @@ const SHADER_SCHEMA = {
 };
 
 const SHADER_PRESETS = [
-    {
-        name: 'Basic Lighting',
-        vertex: DEFAULT_VERTEX_SHADER,
-        fragment: `
-precision highp float;
-varying vec2 vUV;
-varying vec3 vNormal;
-varying vec3 vPositionW;
-uniform vec3 u_lightColor;
-uniform float u_lightIntensity;
-uniform int u_lightType;
-uniform vec3 u_lightDirection;
-uniform vec3 u_lightPosition;
-
-void main(void) {
-    vec3 objectColor = vec3(0.8, 0.2, 0.2); // Simple red color
-    vec3 ambient = vec3(0.1);
-    vec3 normal = normalize(vNormal);
-
-    vec3 lightDir;
-    if (u_lightType == 0) { // Directional/Hemispheric
-        lightDir = normalize(u_lightDirection);
-    } else { // Point Light
-        lightDir = normalize(u_lightPosition - vPositionW);
-    }
-
-    float diffuseFactor = max(dot(normal, lightDir), 0.0);
-    vec3 diffuse = diffuseFactor * u_lightColor * u_lightIntensity;
-    vec3 finalColor = objectColor * (ambient + diffuse);
-
-    gl_FragColor = vec4(finalColor, 1.0);
-}`.trim(),
-    },
-    {
-        name: 'Cel Shading',
-        vertex: DEFAULT_VERTEX_SHADER,
-        fragment: `
-precision highp float;
-varying vec2 vUV;
-varying vec3 vNormal;
-varying vec3 vPositionW;
-uniform vec3 u_lightColor;
-uniform float u_lightIntensity;
-uniform int u_lightType;
-uniform vec3 u_lightDirection;
-uniform vec3 u_lightPosition;
-
-void main(void) {
-    vec3 objectColor = vec3(0.2, 0.6, 0.9);
-    vec3 normal = normalize(vNormal);
-
-    vec3 lightDir;
-    if (u_lightType == 0) {
-        lightDir = normalize(u_lightDirection);
-    } else {
-        lightDir = normalize(u_lightPosition - vPositionW);
-    }
-
-    float diffuse = max(0.0, dot(normal, lightDir)) * u_lightIntensity;
-
-    // Create hard steps for the cartoon effect
-    float celValue;
-    if (diffuse > 0.95) {
-        celValue = 1.0;
-    } else if (diffuse > 0.6) {
-        celValue = 0.7;
-    } else if (diffuse > 0.2) {
-        celValue = 0.4;
-    } else {
-        celValue = 0.2;
-    }
-
-    vec3 finalColor = objectColor * celValue * u_lightColor;
-    gl_FragColor = vec4(finalColor, 1.0);
-}`.trim(),
-    },
-    {
-        name: 'Glossy Plastic',
-        vertex: DEFAULT_VERTEX_SHADER,
-        fragment: `
-precision highp float;
-varying vec2 vUV;
-varying vec3 vNormal;
-varying vec3 vPositionW;
-uniform vec3 u_cameraPosition;
-uniform vec3 u_lightColor;
-uniform float u_lightIntensity;
-uniform int u_lightType;
-uniform vec3 u_lightDirection;
-uniform vec3 u_lightPosition;
-
-void main(void) {
-    vec3 objectColor = vec3(0.1, 0.8, 0.3); // Green plastic
-    float shininess = 32.0;
-
-    vec3 ambient = vec3(0.1);
-    vec3 normal = normalize(vNormal);
-    vec3 viewDir = normalize(u_cameraPosition - vPositionW);
-
-    vec3 lightDir;
-    if (u_lightType == 0) {
-        lightDir = normalize(u_lightDirection);
-    } else {
-        lightDir = normalize(u_lightPosition - vPositionW);
-    }
-    
-    // Diffuse
-    float diffuseFactor = max(dot(normal, lightDir), 0.0);
-    vec3 diffuse = diffuseFactor * u_lightColor;
-
-    // Specular (Blinn-Phong)
-    vec3 halfwayDir = normalize(lightDir + viewDir);
-    float specAngle = max(dot(normal, halfwayDir), 0.0);
-    float specularFactor = pow(specAngle, shininess);
-    vec3 specular = specularFactor * u_lightColor;
-
-    vec3 finalColor = objectColor * (ambient + diffuse) * u_lightIntensity + specular * u_lightIntensity;
-
-    gl_FragColor = vec4(finalColor, 1.0);
-}`.trim(),
-    },
-    {
-        name: 'Metallic Reflection',
-        vertex: DEFAULT_VERTEX_SHADER,
-        fragment: `
-precision highp float;
-varying vec3 vNormal;
-varying vec3 vPositionW;
-uniform vec3 u_cameraPosition;
-uniform samplerCube u_envTexture;
-uniform int u_hasEnvTexture;
-
-void main(void) {
-    if (u_hasEnvTexture == 0) {
-        // Fallback color if no environment map is present
-        gl_FragColor = vec4(0.8, 0.8, 0.8, 1.0);
-        return;
-    }
-
-    vec3 viewDir = normalize(vPositionW - u_cameraPosition);
-    vec3 normal = normalize(vNormal);
-    vec3 reflectDir = reflect(viewDir, normal);
-    
-    // Sample the environment cube map for the reflection
-    vec4 reflectionColor = textureCube(u_envTexture, reflectDir);
-
-    gl_FragColor = vec4(reflectionColor.rgb, 1.0);
-}`.trim(),
-    },
-    {
-        name: 'Psychedelic Wobble',
-        vertex: `
-precision highp float;
-attribute vec3 position;
-attribute vec2 uv;
-attribute vec3 normal;
-uniform mat4 worldViewProjection;
-uniform mat4 world;
-uniform float u_time;
-
-varying vec2 vUV;
-varying vec3 vNormal;
-varying vec3 vPositionW;
-
-void main(void) {
-    // Animate vertex positions
-    float wobbleFactor = 0.2 * sin(position.y * 5.0 + u_time * 2.0);
-    vec3 wobbledPosition = position + normal * wobbleFactor;
-
-    vec4 worldPosition = world * vec4(wobbledPosition, 1.0);
-    gl_Position = worldViewProjection * vec4(wobbledPosition, 1.0);
-    
-    vUV = uv;
-    vPositionW = worldPosition.xyz;
-    
-    // Transform normal to world space and normalize it.
-    // Note: for perfect accuracy with the wobbled position, the normal vector itself should be recalculated.
-    vec3 worldNormal = mat3(world) * normal;
-    vNormal = normalize(worldNormal);
-}`.trim(),
-        fragment: `
-precision highp float;
-varying vec2 vUV;
-varying vec3 vNormal;
-uniform float u_time;
-uniform vec3 u_lightColor;
-uniform float u_lightIntensity;
-uniform vec3 u_lightDirection;
-
-void main(void) {
-    // Create a colorful pattern that changes over time
-    float r = 0.5 + 0.5 * sin(vUV.x * 10.0 + u_time);
-    float g = 0.5 + 0.5 * cos(vUV.y * 10.0 + u_time * 1.5);
-    float b = 0.5 + 0.5 * sin(vNormal.z * 5.0 + u_time * 0.5);
-    vec3 objectColor = vec3(r, g, b);
-
-    // Simple lighting
-    vec3 normal = normalize(vNormal);
-    float diffuse = max(0.0, dot(normal, normalize(u_lightDirection)));
-    
-    gl_FragColor = vec4(objectColor * (0.3 + diffuse * u_lightIntensity), 1.0);
-}`.trim(),
-    }
+    { name: 'Matte Plastic', albedo: '#c73333', metallic: 0.0, roughness: 0.8 },
+    { name: 'Polished Gold', albedo: '#ffd700', metallic: 1.0, roughness: 0.1 },
+    { name: 'Rough Steel', albedo: '#b8b8b8', metallic: 1.0, roughness: 0.7 },
+    { name: 'Shiny Porcelain', albedo: '#f0f0f0', metallic: 0.0, roughness: 0.2 },
+    { name: 'Rubber Tire', albedo: '#202020', metallic: 0.0, roughness: 0.9 },
 ];
 
 interface SavedShader {
     name: string;
     vertex: string;
     fragment: string;
+    material?: {
+        albedo: string;
+        metallic: number;
+        roughness: number;
+    }
 }
 
 interface RefinementSelection {
@@ -359,7 +231,7 @@ const App = () => {
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [promptActionLoading, setPromptActionLoading] = useState<'random' | 'enhance' | null>(null);
     const [error, setError] = useState<string>('');
-    const [activeTab, setActiveTab] = useState<'vertex' | 'fragment'>('vertex');
+    const [activeTab, setActiveTab] = useState<'vertex' | 'fragment'>('fragment');
     const [selectedMesh, setSelectedMesh] = useState<string>('sphere');
     const [meshResolution, setMeshResolution] = useState<number>(32);
     const [showWireframe, setShowWireframe] = useState<boolean>(false);
@@ -368,6 +240,11 @@ const App = () => {
         intensity: 1.0,
         diffuse: '#ffffff',
         direction: { x: 1, y: 1, z: 0 } // Re-used for position in point lights
+    });
+     const [materialState, setMaterialState] = useState({
+        albedo: '#b3b3b3',
+        metallic: 0.1,
+        roughness: 0.5,
     });
     const [environmentTexture, setEnvironmentTexture] = useState<string | null>(null);
     const [liveReload, setLiveReload] = useState<boolean>(false);
@@ -404,12 +281,10 @@ const App = () => {
     // State for Time Control
     const [timeState, setTimeState] = useState({ playing: true, time: 0.0 });
     
-    const LMSTUDIO_CONNECTION_ERROR_MESSAGE = `LM Studio connection failed ('Failed to fetch'). Common causes:
-1. CORS: Go to the server tab in LM Studio and check 'Enable CORS'.
-2. Server: Ensure the LM Studio server is running.
-3. URL: Verify the URL is correct and accessible from your browser.
-4. Firewall: Check for firewalls blocking the connection.`;
-    const LOCAL_LLM_CONNECTION_ERROR_MESSAGE = "Local LLM connection failed ('Failed to fetch').";
+    // Unique error message identifiers for structured feedback
+    const GEMINI_RATE_LIMIT_ERROR_MESSAGE = 'GEMINI_RATE_LIMIT_ERROR';
+    const LMSTUDIO_CONNECTION_ERROR_MESSAGE = `LMSTUDIO_CONNECTION_ERROR`;
+    const LOCAL_LLM_CONNECTION_ERROR_MESSAGE = "LOCAL_LLM_CONNECTION_ERROR";
 
 
     const babylonCanvas = useRef<HTMLCanvasElement | null>(null);
@@ -420,6 +295,7 @@ const App = () => {
     const skyboxRef = useRef<any>(null);
     const ppPipelineRef = useRef<any>(null);
     const lightStateRef = useRef(lightState);
+    const materialStateRef = useRef(materialState);
     const timeStateRef = useRef(timeState);
     const prevSelectedMeshRef = useRef<string | undefined>(undefined);
 
@@ -435,6 +311,10 @@ const App = () => {
     useEffect(() => {
         lightStateRef.current = lightState;
     }, [lightState]);
+
+    useEffect(() => {
+        materialStateRef.current = materialState;
+    }, [materialState]);
 
     useEffect(() => {
         timeStateRef.current = timeState;
@@ -533,7 +413,7 @@ const App = () => {
         } finally {
             setIsFetchingLmStudioModels(false);
         }
-    }, [lmStudioUrl, llmProvider]);
+    }, [lmStudioUrl, llmProvider, LMSTUDIO_CONNECTION_ERROR_MESSAGE]);
 
     // Effect to auto-fetch LM Studio models when URL or provider changes
     useEffect(() => {
@@ -564,7 +444,12 @@ const App = () => {
             return;
         }
 
-        const newShader = { name: shaderName.trim(), vertex: vertexCode, fragment: fragmentCode };
+        const newShader: SavedShader = {
+            name: shaderName.trim(),
+            vertex: vertexCode,
+            fragment: fragmentCode,
+            material: { ...materialState }
+        };
         
         const existingShaderIndex = savedShaders.findIndex(s => s.name === newShader.name);
         
@@ -594,6 +479,12 @@ const App = () => {
         if (shaderToLoad) {
             setVertexCode(shaderToLoad.vertex);
             setFragmentCode(shaderToLoad.fragment);
+            if (shaderToLoad.material) {
+                setMaterialState(shaderToLoad.material);
+            } else {
+                // Reset to default for older saved shaders without material properties
+                setMaterialState({ albedo: '#b3b3b3', metallic: 0.1, roughness: 0.5 });
+            }
             setSelectedPreset(''); // Clear preset selection when loading a saved shader
         }
     };
@@ -627,6 +518,7 @@ const App = () => {
             name: shaderToExport.name,
             vertexShader: shaderToExport.vertex,
             fragmentShader: shaderToExport.fragment,
+            material: shaderToExport.material
         };
 
         const jsonString = JSON.stringify(packageData, null, 2); // Pretty print
@@ -666,6 +558,7 @@ const App = () => {
                     name: importedData.name.trim(),
                     vertex: importedData.vertexShader,
                     fragment: importedData.fragmentShader,
+                    material: importedData.material // Will be undefined if not present, which is fine
                 };
 
                 const existingShaderIndex = savedShaders.findIndex(s => s.name === newShader.name);
@@ -690,6 +583,9 @@ const App = () => {
                 setSelectedShader(newShader.name);
                 setVertexCode(newShader.vertex);
                 setFragmentCode(newShader.fragment);
+                if (newShader.material) {
+                    setMaterialState(newShader.material);
+                }
                 
                 alert(`Shader "${newShader.name}" imported successfully!`);
 
@@ -733,7 +629,8 @@ const App = () => {
                 uniforms: [
                     "world", "worldView", "worldViewProjection", "view", "projection", 
                     "u_time", "u_lightColor", "u_lightIntensity", "u_lightDirection", 
-                    "u_lightPosition", "u_lightType", "u_cameraPosition", "u_hasEnvTexture"
+                    "u_lightPosition", "u_lightType", "u_cameraPosition", "u_hasEnvTexture",
+                    "u_albedo", "u_metallic", "u_roughness"
                 ],
                 samplers: ["u_envTexture"],
                 onError: (sender: any, errors: string) => {
@@ -800,9 +697,16 @@ const App = () => {
             const material = scene.getMaterialByName("customShader");
             if (material && material.getClassName() === "ShaderMaterial") {
                 const ls = lightStateRef.current;
+                const ms = materialStateRef.current;
                 const lightVector = new BABYLON.Vector3(ls.direction.x, ls.direction.y, ls.direction.z);
                 
+                // Time and Material Uniforms
                 (material as any).setFloat("u_time", timeStateRef.current.time);
+                material.setColor3("u_albedo", BABYLON.Color3.FromHexString(ms.albedo));
+                material.setFloat("u_metallic", ms.metallic);
+                material.setFloat("u_roughness", ms.roughness);
+
+                // Light Uniforms
                 material.setFloat("u_lightIntensity", ls.intensity);
                 material.setColor3("u_lightColor", BABYLON.Color3.FromHexString(ls.diffuse));
 
@@ -814,6 +718,7 @@ const App = () => {
                     material.setVector3("u_lightDirection", lightVector);
                 }
 
+                // Camera and Environment Uniforms
                 if (scene.activeCamera) {
                     material.setVector3("u_cameraPosition", scene.activeCamera.position);
                 }
@@ -1122,6 +1027,28 @@ const App = () => {
         return null;
     };
 
+    const handleAiError = (error: any) => {
+        console.error("AI Error:", error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+    
+        if (llmProvider === 'gemini' && (errorMessage.includes('429') || errorMessage.includes('RESOURCE_EXHAUSTED'))) {
+            setError(GEMINI_RATE_LIMIT_ERROR_MESSAGE);
+            return;
+        }
+    
+        if (error instanceof TypeError && errorMessage === 'Failed to fetch') {
+            if (llmProvider === 'lmstudio') {
+                setError(LMSTUDIO_CONNECTION_ERROR_MESSAGE);
+            } else if (llmProvider === 'local') {
+                setError(LOCAL_LLM_CONNECTION_ERROR_MESSAGE);
+            } else {
+                 setError(`Connection failed: ${errorMessage}`);
+            }
+            return;
+        }
+        
+        setError(`An error occurred: ${errorMessage}`);
+    };
 
     const handleGenerateShader = async () => {
         setIsLoading(true);
@@ -1141,7 +1068,8 @@ Please provide the complete GLSL code for both the vertex and fragment shaders.
 - The fragment shader MUST define \`gl_FragColor\`.
 - It will receive the varyings \`vUV\`, \`vNormal\`, and \`vPositionW\`.
 - Babylon.js provides these uniforms automatically: \`mat4 worldViewProjection\`, \`mat4 world\`, \`mat4 view\`, \`mat4 projection\`.
-- Custom uniforms are also provided for animations and lighting: \`float u_time\`, \`vec3 u_lightColor\`, \`float u_lightIntensity\`, \`vec3 u_lightDirection\`, \`vec3 u_lightPosition\`, \`int u_lightType\`, \`vec3 u_cameraPosition\`.
+- Custom uniforms are also provided: \`float u_time\`, \`vec3 u_lightColor\`, \`float u_lightIntensity\`, \`vec3 u_lightDirection\`, \`vec3 u_lightPosition\`, \`int u_lightType\`, \`vec3 u_cameraPosition\`.
+- PBR uniforms are: \`vec3 u_albedo\`, \`float u_metallic\`, \`float u_roughness\`. You can use these instead of hard-coding material properties.
 - Environment reflection uniforms are: \`samplerCube u_envTexture\`, \`int u_hasEnvTexture\`. The shader MUST use \`u_hasEnvTexture\` to conditionally apply reflections.
 - The shader MUST use \`u_lightType\` to differentiate between directional/hemispheric (0) and point (1) lights.
 - CRITICAL: The returned GLSL code must be thoroughly commented to explain complex logic, uniform variables, and the overall purpose of different code blocks.
@@ -1245,23 +1173,14 @@ ${fragmentCode}
                 setVertexCode(formattedVertex);
                 setFragmentCode(formattedFragment);
                 setSelectedPreset(''); // Clear preset selection after generating
+                 // Reset material to a neutral default when generating a new shader
+                setMaterialState({ albedo: '#b3b3b3', metallic: 0.1, roughness: 0.5 });
             } else {
                 setError("AI response was missing shader code. Please try again.");
             }
 
         } catch (e: any) {
-            console.error(e);
-            if (e instanceof TypeError && e.message === 'Failed to fetch') {
-                 if (llmProvider === 'lmstudio') {
-                    setError(LMSTUDIO_CONNECTION_ERROR_MESSAGE);
-                } else {
-                    setError(LOCAL_LLM_CONNECTION_ERROR_MESSAGE);
-                }
-            } else {
-                // Prepend a user-friendly message to the technical error
-                const technicalError = e instanceof Error ? e.message : 'An unknown error occurred.';
-                setError(`Failed to generate shader. Error: ${technicalError}`);
-            }
+            handleAiError(e);
         } finally {
             setIsLoading(false);
         }
@@ -1341,16 +1260,7 @@ ${fragmentCode}
 
             setPrompt(resultText.trim().replace(/['"]+/g, '')); // Clean up quotes
         } catch (e: any) {
-            console.error(e);
-            if (e instanceof TypeError && e.message === 'Failed to fetch') {
-                if (llmProvider === 'lmstudio') {
-                    setError(LMSTUDIO_CONNECTION_ERROR_MESSAGE);
-                } else {
-                     setError(LOCAL_LLM_CONNECTION_ERROR_MESSAGE);
-                }
-            } else {
-                setError(e instanceof Error ? e.message : `Failed to ${action} prompt.`);
-            }
+            handleAiError(e);
         } finally {
             setPromptActionLoading(null);
         }
@@ -1478,16 +1388,7 @@ ${refinementSelection.code}
             closeRefineModal();
 
         } catch (e: any) {
-            console.error("Refinement failed:", e);
-             if (e instanceof TypeError && e.message === 'Failed to fetch') {
-                 if (llmProvider === 'lmstudio') {
-                    setError(LMSTUDIO_CONNECTION_ERROR_MESSAGE);
-                } else {
-                     setError(LOCAL_LLM_CONNECTION_ERROR_MESSAGE);
-                }
-            } else {
-                setError(e instanceof Error ? e.message : "Failed to refine code.");
-            }
+            handleAiError(e);
             // Don't close the modal on error, so the user can try again
         } finally {
             setIsRefining(false);
@@ -1574,8 +1475,11 @@ ${refinementSelection.code}
 
         const preset = SHADER_PRESETS.find(p => p.name === presetName);
         if (preset) {
-            setVertexCode(preset.vertex);
-            setFragmentCode(preset.fragment);
+            setMaterialState({
+                albedo: preset.albedo,
+                metallic: preset.metallic,
+                roughness: preset.roughness,
+            });
             setSelectedShader(''); // Clear saved shader selection
         }
     };
@@ -1636,6 +1540,46 @@ ${refinementSelection.code}
                                                 <option value="local">Local LLM (Ollama)</option>
                                             </select>
                                         </div>
+                                        
+                                        {/* --- UNIFIED ERROR DISPLAY --- */}
+                                        {error && (
+                                            <>
+                                                {error === GEMINI_RATE_LIMIT_ERROR_MESSAGE && (
+                                                    <div className="error-message-inline structured-error">
+                                                        <strong>Gemini API Rate Limit Exceeded</strong>
+                                                        <p>You've made too many requests in a short period. Please check your plan and billing details, or wait a minute before trying again.</p>
+                                                        <p>For more information, see the <a href="https://ai.google.dev/gemini-api/docs/rate-limits" target="_blank" rel="noopener noreferrer">Gemini API Rate Limits documentation</a>.</p>
+                                                    </div>
+                                                )}
+                                                {error === LMSTUDIO_CONNECTION_ERROR_MESSAGE && (
+                                                    <div className="error-message-inline structured-error">
+                                                        <strong>LM Studio Connection Failed</strong>
+                                                        <p>This is a network issue, most likely related to CORS. Please check the following:</p>
+                                                        <ul>
+                                                            <li>In the LM Studio app, go to the "Server" tab and <strong>check the "Enable CORS" box</strong>. This is the most common fix.</li>
+                                                            <li>Ensure the LM Studio server is running.</li>
+                                                            <li>Verify the Server URL below is correct.</li>
+                                                            <li>Check for firewalls blocking the connection.</li>
+                                                        </ul>
+                                                    </div>
+                                                )}
+                                                {error === LOCAL_LLM_CONNECTION_ERROR_MESSAGE && (
+                                                    <div className="error-message-inline structured-error">
+                                                        <strong>Local LLM Connection Failed</strong>
+                                                        <p>This is a network issue. Please check the following:</p>
+                                                        <ul>
+                                                            <li>Is your local server (e.g., Ollama) running?</li>
+                                                            <li>Is the Endpoint URL below correct?</li>
+                                                            <li>Your server may need to be configured to allow requests from this web page (CORS).</li>
+                                                        </ul>
+                                                    </div>
+                                                )}
+                                                {/* Fallback for other, unexpected errors */}
+                                                {![GEMINI_RATE_LIMIT_ERROR_MESSAGE, LMSTUDIO_CONNECTION_ERROR_MESSAGE, LOCAL_LLM_CONNECTION_ERROR_MESSAGE].includes(error) && (
+                                                    <pre className="error-message-inline">{error}</pre>
+                                                )}
+                                            </>
+                                        )}
 
                                         <div className={`effect-options ${llmProvider === 'lmstudio' ? 'visible' : ''}`}>
                                             <div>
@@ -1679,22 +1623,6 @@ ${refinementSelection.code}
                                                 <p className="form-hint">
                                                     Connects to your LM Studio server. <strong>Note:</strong> You must check the "Enable CORS" box in the LM Studio server settings.
                                                 </p>
-                                                {llmProvider === 'lmstudio' && error && (
-                                                    error === LMSTUDIO_CONNECTION_ERROR_MESSAGE ? (
-                                                        <div className="error-message-inline structured-error">
-                                                            <strong>LM Studio Connection Failed</strong>
-                                                            <p>This is a network issue, most likely related to CORS. Please check the following:</p>
-                                                            <ul>
-                                                                <li>In the LM Studio app, go to the "Server" tab and <strong>check the "Enable CORS" box</strong>. This is the most common fix.</li>
-                                                                <li>Ensure the LM Studio server is running.</li>
-                                                                <li>Verify the Server URL above is correct.</li>
-                                                                <li>Check for firewalls blocking the connection.</li>
-                                                            </ul>
-                                                        </div>
-                                                    ) : (
-                                                        <pre className="error-message-inline">{error}</pre>
-                                                    )
-                                                )}
                                             </div>
                                         </div>
                                         
@@ -1729,21 +1657,6 @@ ${refinementSelection.code}
                                                 <p className="form-hint">
                                                     Connects to your local LLM server (e.g., Ollama).
                                                 </p>
-                                                {llmProvider === 'local' && error && (
-                                                    error === LOCAL_LLM_CONNECTION_ERROR_MESSAGE ? (
-                                                        <div className="error-message-inline structured-error">
-                                                            <strong>Local LLM Connection Failed</strong>
-                                                            <p>This is a network issue. Please check the following:</p>
-                                                            <ul>
-                                                                <li>Is your local server (e.g., Ollama) running?</li>
-                                                                <li>Is the Endpoint URL above correct?</li>
-                                                                <li>Your server may need to be configured to allow requests from this web page (CORS).</li>
-                                                            </ul>
-                                                        </div>
-                                                    ) : (
-                                                        <pre className="error-message-inline">{error}</pre>
-                                                    )
-                                                )}
                                             </div>
                                         </div>
 
@@ -1766,18 +1679,6 @@ ${refinementSelection.code}
                                                 placeholder="e.g., a shiny metallic gold material, or a psychedelic rainbow effect..."
                                                 aria-label="Enter your shader description here"
                                             />
-                                        </div>
-                                        <div className="form-group">
-                                            <label htmlFor="preset-select">Shader Presets</label>
-                                            <select 
-                                                id="preset-select" 
-                                                value={selectedPreset} 
-                                                onChange={(e) => handlePresetChange(e.target.value)}
-                                                aria-label="Select a shader preset"
-                                            >
-                                                <option value="">-- Select a Preset --</option>
-                                                {SHADER_PRESETS.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
-                                            </select>
                                         </div>
                                         <button onClick={handleGenerateShader} disabled={isLoading || !prompt}>
                                             {isLoading ? <span className="loader" /> : 'Generate with AI'}
@@ -1839,6 +1740,51 @@ ${refinementSelection.code}
                                                 />
                                                 <span className="slider round"></span>
                                             </label>
+                                        </div>
+                                        <div className="control-divider"></div>
+                                        <h3 className="control-subtitle">Material</h3>
+                                        <div className="form-group">
+                                            <label htmlFor="preset-select">Material Presets</label>
+                                            <select 
+                                                id="preset-select" 
+                                                value={selectedPreset} 
+                                                onChange={(e) => handlePresetChange(e.target.value)}
+                                                aria-label="Select a material preset"
+                                            >
+                                                <option value="">-- Custom --</option>
+                                                {SHADER_PRESETS.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="form-group form-group-row">
+                                            <label htmlFor="material-albedo">Albedo</label>
+                                            <input
+                                                id="material-albedo"
+                                                type="color"
+                                                value={materialState.albedo}
+                                                onChange={(e) => setMaterialState(prev => ({ ...prev, albedo: e.target.value }))}
+                                            />
+                                        </div>
+                                        <div className="form-group form-group-row">
+                                            <label htmlFor="material-metallic">Metallic</label>
+                                            <input
+                                                id="material-metallic"
+                                                type="range"
+                                                min="0" max="1" step="0.01"
+                                                value={materialState.metallic}
+                                                onChange={(e) => setMaterialState(prev => ({ ...prev, metallic: parseFloat(e.target.value) }))}
+                                            />
+                                            <span>{materialState.metallic.toFixed(2)}</span>
+                                        </div>
+                                        <div className="form-group form-group-row">
+                                            <label htmlFor="material-roughness">Roughness</label>
+                                            <input
+                                                id="material-roughness"
+                                                type="range"
+                                                min="0" max="1" step="0.01"
+                                                value={materialState.roughness}
+                                                onChange={(e) => setMaterialState(prev => ({ ...prev, roughness: parseFloat(e.target.value) }))}
+                                            />
+                                            <span>{materialState.roughness.toFixed(2)}</span>
                                         </div>
                                         <div className="control-divider"></div>
                                         <h3 className="control-subtitle">Lighting</h3>
