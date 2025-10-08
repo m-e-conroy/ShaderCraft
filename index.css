@@ -757,6 +757,33 @@ input:checked + .slider:before {
   border-left: 1px solid #f8f8f0;
 }
 
+/* --- CodeMirror Linting Styles --- */
+.CodeMirror-lint-marker-error, .CodeMirror-lint-marker-warning {
+    font-family: arial;
+    font-size: 16px;
+    font-weight: bold;
+    color: #fff;
+    padding: 2px 5px;
+    border-radius: 50%;
+    cursor: help;
+}
+.CodeMirror-lint-marker-error {
+    background-color: var(--error-color);
+}
+
+.CodeMirror-lint-message-error, .CodeMirror-lint-message-warning {
+    padding: 0.5rem 0.75rem;
+    background: var(--panel-bg-color);
+    border: 1px solid var(--border-color);
+    box-shadow: 0 3px 8px rgba(0,0,0,0.3);
+    border-radius: 4px;
+    color: var(--text-color);
+    font-family: var(--font-family);
+    font-size: 0.85rem;
+    max-width: 400px;
+}
+
+
 /* Footer & Error Console */
 .app-footer {
   background-color: var(--header-bg-color);

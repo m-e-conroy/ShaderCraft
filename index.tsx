@@ -223,6 +223,60 @@ const getInitialState = (key: string, defaultValue: any): any => {
     return defaultValue;
 };
 
+/**
+ * Validates GLSL code by attempting to compile it in a temporary WebGL context.
+ * This provides the most accurate, browser-specific syntax checking.
+ * @param code The GLSL code string to validate.
+ * @param type The type of shader, either 'vertex' or 'fragment'.
+ * @returns An array of error objects formatted for the CodeMirror lint addon.
+ */
+const glslValidator = (code: string, type: 'vertex' | 'fragment'): any[] => {
+    // Use a static canvas/context to avoid creating them repeatedly, improving performance.
+    const validator = glslValidator as any;
+    if (!validator.gl) {
+        const canvas = document.createElement('canvas');
+        // Try to get a WebGL2 context first for better feature support, fallback to WebGL1.
+        validator.gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+        if (!validator.gl) {
+            console.warn("WebGL is not available for GLSL validation.");
+            return [];
+        }
+    }
+    const gl = validator.gl;
+
+    const shader = gl.createShader(type === 'vertex' ? gl.VERTEX_SHADER : gl.FRAGMENT_SHADER);
+    if (!shader) return [];
+
+    gl.shaderSource(shader, code);
+    gl.compileShader(shader);
+
+    const errors: any[] = [];
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        const infoLog = gl.getShaderInfoLog() || 'Unknown GLSL compilation error';
+        const lines = infoLog.split('\n');
+        
+        for (const line of lines) {
+            // Standard error format: "ERROR: 0:<line>: <message>"
+            const match = line.match(/ERROR: 0:(\d+):(.*)/);
+            if (match) {
+                const lineNumber = parseInt(match[1], 10);
+                const message = match[2].trim();
+                if (lineNumber > 0) {
+                     errors.push({
+                        from: CodeMirror.Pos(lineNumber - 1, 0),
+                        to: CodeMirror.Pos(lineNumber - 1, 1000), // Highlight the whole line
+                        message: message,
+                        severity: 'error'
+                    });
+                }
+            }
+        }
+    }
+    
+    gl.deleteShader(shader);
+    return errors;
+};
+
 // FIX: Removed `: React.FC` to simplify the component definition and avoid potential complex type-checking issues.
 const App = () => {
     const [vertexCode, setVertexCode] = useState<string>(DEFAULT_VERTEX_SHADER);
@@ -285,6 +339,7 @@ const App = () => {
     const GEMINI_RATE_LIMIT_ERROR_MESSAGE = 'GEMINI_RATE_LIMIT_ERROR';
     const LMSTUDIO_CONNECTION_ERROR_MESSAGE = `LMSTUDIO_CONNECTION_ERROR`;
     const LOCAL_LLM_CONNECTION_ERROR_MESSAGE = "LOCAL_LLM_CONNECTION_ERROR";
+    const TIMEOUT_ERROR_MESSAGE = "TIMEOUT_ERROR";
 
 
     const babylonCanvas = useRef<HTMLCanvasElement | null>(null);
@@ -380,7 +435,7 @@ const App = () => {
         try {
             const url = new URL('/v1/models', lmStudioUrl).toString();
             const response = await fetch(url, {
-                signal: AbortSignal.timeout(5000) // 5 second timeout
+                signal: AbortSignal.timeout(15000) // 15 second timeout for fetching models
             });
             
             if (!response.ok) throw new Error(`Server responded with status: ${response.status}`);
@@ -403,7 +458,9 @@ const App = () => {
 
         } catch (err: any) {
             console.error("LM Studio connection/fetch error:", err);
-            if (err instanceof TypeError && err.message === 'Failed to fetch') {
+             if (err.name === 'TimeoutError' || (err instanceof DOMException && err.name === 'AbortError')) {
+                setError(TIMEOUT_ERROR_MESSAGE);
+            } else if (err instanceof TypeError && err.message === 'Failed to fetch') {
                 setError(LMSTUDIO_CONNECTION_ERROR_MESSAGE);
             } else {
                 setError(err.message || 'An unknown error occurred while connecting to LM Studio.');
@@ -413,7 +470,7 @@ const App = () => {
         } finally {
             setIsFetchingLmStudioModels(false);
         }
-    }, [lmStudioUrl, llmProvider, LMSTUDIO_CONNECTION_ERROR_MESSAGE]);
+    }, [lmStudioUrl, llmProvider, LMSTUDIO_CONNECTION_ERROR_MESSAGE, TIMEOUT_ERROR_MESSAGE]);
 
     // Effect to auto-fetch LM Studio models when URL or provider changes
     useEffect(() => {
@@ -935,15 +992,30 @@ const App = () => {
 
     // Effect for initializing CodeMirror editors and adding selection listener
     useEffect(() => {
-        const setupEditor = (container: HTMLElement | null, value: string, mode: string, cmRef: React.MutableRefObject<any>, setCode: (code: string) => void) => {
+        const setupEditor = (
+            container: HTMLElement | null, 
+            value: string, 
+            mode: string, 
+            cmRef: React.MutableRefObject<any>, 
+            setCode: (code: string) => void,
+            shaderType: 'vertex' | 'fragment'
+        ) => {
             if (container && !cmRef.current) {
                 const cm = CodeMirror(container, {
                     value: value,
                     mode: mode,
                     theme: 'material-darker',
                     lineNumbers: true,
+                    gutters: ["CodeMirror-linenumbers", "CodeMirror-lint-markers"],
+                    lint: {
+                        getAnnotations: (code: string) => glslValidator(code, shaderType),
+                    },
                 });
-                cm.on('change', (instance: any) => setCode(instance.getValue()));
+                cm.on('change', (instance: any) => {
+                    setCode(instance.getValue());
+                    // Manually trigger linting on change
+                    instance.performLint();
+                });
                 cm.on('cursorActivity', (instance: any) => {
                     // This listener might fire for both editors, so we ensure hasSelection is true
                     // if *either* has a selection. A more robust solution might track them separately.
@@ -957,8 +1029,8 @@ const App = () => {
             }
         };
 
-        setupEditor(vertexEditorContainer.current, vertexCode, 'x-shader/x-vertex', vertexCmRef, setVertexCode);
-        setupEditor(fragmentEditorContainer.current, fragmentCode, 'x-shader/x-fragment', fragmentCmRef, setFragmentCode);
+        setupEditor(vertexEditorContainer.current, vertexCode, 'x-shader/x-vertex', vertexCmRef, setVertexCode, 'vertex');
+        setupEditor(fragmentEditorContainer.current, fragmentCode, 'x-shader/x-fragment', fragmentCmRef, setFragmentCode, 'fragment');
 
     }, []);
 
@@ -1030,6 +1102,11 @@ const App = () => {
     const handleAiError = (error: any) => {
         console.error("AI Error:", error);
         const errorMessage = error instanceof Error ? error.message : String(error);
+
+        if (error.name === 'TimeoutError' || (error instanceof DOMException && error.name === 'AbortError')) {
+            setError(TIMEOUT_ERROR_MESSAGE);
+            return;
+        }
     
         if (llmProvider === 'gemini' && (errorMessage.includes('429') || errorMessage.includes('RESOURCE_EXHAUSTED'))) {
             setError(GEMINI_RATE_LIMIT_ERROR_MESSAGE);
@@ -1094,6 +1171,8 @@ ${fragmentCode}
 
         try {
             let rawResponseText: string | null = null;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout for generation
 
             if (llmProvider === 'gemini') {
                 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -1115,6 +1194,7 @@ ${fragmentCode}
                 const url = new URL('/v1/chat/completions', lmStudioUrl).toString();
                 const response = await fetch(url, {
                     method: 'POST',
+                    signal: controller.signal,
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         model: selectedLmStudioModel,
@@ -1123,7 +1203,7 @@ ${fragmentCode}
                             { role: 'user', content: userContent }
                         ],
                         stream: false,
-                        response_format: { type: 'json_object' } // Request JSON output
+                        // response_format: { type: 'json_object' } // Removed for better compatibility
                     })
                 });
                 if (!response.ok) {
@@ -1142,6 +1222,7 @@ ${fragmentCode}
                 }
                 const response = await fetch(localLlmEndpoint, {
                     method: 'POST',
+                    signal: controller.signal,
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         model: localLlmModel,
@@ -1158,6 +1239,8 @@ ${fragmentCode}
                 // Response structure can vary (e.g., { response: "..." } for Ollama)
                 rawResponseText = responseData.response || responseData.content || JSON.stringify(responseData);
             }
+
+            clearTimeout(timeoutId);
 
             if (!rawResponseText) {
                 throw new Error("AI response was empty or malformed.");
@@ -1191,11 +1274,13 @@ ${fragmentCode}
         setError('');
 
         const content = action === 'random'
-            ? "Generate a single, short, and creative prompt for a GLSL shader effect. Examples: 'liquid mercury flowing over a sphere', 'holographic glitch effect', 'a shield made of swirling energy'. Return ONLY the raw text content for the prompt. Do not include any extra words, formatting, escaped symbols, or XML data."
+            ? "Generate a single, short, and creative prompt for a GLSL shader effect. Be descriptive and inspiring. Draw from themes like: glows, flows, organic growth, waves, tiles, natural textures (wood, stone), metals, and intricate patterns. Examples: 'shimmering iridescent fish scales', 'molten lava slowly cracking', 'glowing alien circuits', 'polished mahogany wood grain', 'rippling water with caustic patterns', 'swirling magical energy shield'. Return ONLY the raw text content for the prompt. Do not include any extra words, formatting, escaped symbols, or XML data."
             : `You are a creative assistant for a 3D artist. Take the following shader idea and enhance it, making it more descriptive, vivid, and inspiring, but keep it as a concise prompt. User's idea: "${prompt}". Return ONLY the raw, enhanced prompt text. Do not include any introductory phrases, escaped symbols, or XML data.`;
         
         try {
             let resultText: string;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 20000); // 20 second timeout for prompt actions
 
             if (llmProvider === 'gemini') {
                 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -1223,6 +1308,7 @@ ${fragmentCode}
                 }
                 const response = await fetch(url, {
                     method: 'POST',
+                    signal: controller.signal,
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(requestBody)
                 });
@@ -1250,6 +1336,7 @@ ${fragmentCode}
 
                 const response = await fetch(localLlmEndpoint, {
                      method: 'POST',
+                     signal: controller.signal,
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(requestBody)
                 });
@@ -1257,7 +1344,8 @@ ${fragmentCode}
                 const data = await response.json();
                 resultText = data.response || data.content || '';
             }
-
+            
+            clearTimeout(timeoutId);
             setPrompt(resultText.trim().replace(/['"]+/g, '')); // Clean up quotes
         } catch (e: any) {
             handleAiError(e);
@@ -1318,6 +1406,8 @@ ${refinementSelection.code}
 `;
         try {
             let refinedCode: string;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 second timeout for refinement
 
             if (llmProvider === 'gemini') {
                 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -1336,6 +1426,7 @@ ${refinementSelection.code}
                 const url = new URL('/v1/chat/completions', lmStudioUrl).toString();
                 const response = await fetch(url, {
                     method: 'POST',
+                    signal: controller.signal,
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         model: selectedLmStudioModel,
@@ -1363,6 +1454,7 @@ ${refinementSelection.code}
                 }
                  const response = await fetch(localLlmEndpoint, {
                      method: 'POST',
+                     signal: controller.signal,
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ model: localLlmModel, prompt: `${systemInstruction}\n\n${userContent}`, stream: false })
                 });
@@ -1374,6 +1466,8 @@ ${refinementSelection.code}
                 const markdownMatch = rawResponse.match(/```(?:glsl)?\s*([\s\S]*?)\s*```/);
                 refinedCode = markdownMatch ? markdownMatch[1].trim() : rawResponse.trim();
             }
+            
+            clearTimeout(timeoutId);
 
             if (!refinedCode) {
                  throw new Error("AI returned an empty response.");
@@ -1574,8 +1668,20 @@ ${refinementSelection.code}
                                                         </ul>
                                                     </div>
                                                 )}
+                                                {error === TIMEOUT_ERROR_MESSAGE && (
+                                                    <div className="error-message-inline structured-error">
+                                                        <strong>Request Timed Out</strong>
+                                                        <p>The request to the AI model took too long to respond. This can happen for several reasons:</p>
+                                                        <ul>
+                                                            <li>The AI model is very large and is still loading into memory.</li>
+                                                            <li>The task is very complex and requires a lot of computation.</li>
+                                                            <li>Your network connection to the server is slow.</li>
+                                                        </ul>
+                                                         <p>Please try again in a moment. If the problem persists, consider using a smaller model.</p>
+                                                    </div>
+                                                )}
                                                 {/* Fallback for other, unexpected errors */}
-                                                {![GEMINI_RATE_LIMIT_ERROR_MESSAGE, LMSTUDIO_CONNECTION_ERROR_MESSAGE, LOCAL_LLM_CONNECTION_ERROR_MESSAGE].includes(error) && (
+                                                {![GEMINI_RATE_LIMIT_ERROR_MESSAGE, LMSTUDIO_CONNECTION_ERROR_MESSAGE, LOCAL_LLM_CONNECTION_ERROR_MESSAGE, TIMEOUT_ERROR_MESSAGE].includes(error) && (
                                                     <pre className="error-message-inline">{error}</pre>
                                                 )}
                                             </>
