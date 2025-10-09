@@ -252,7 +252,7 @@ const glslValidator = (code: string, type: 'vertex' | 'fragment'): any[] => {
 
     const errors: any[] = [];
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        const infoLog = gl.getShaderInfoLog() || 'Unknown GLSL compilation error';
+        const infoLog = gl.getShaderInfoLog(shader) || 'Unknown GLSL compilation error';
         const lines = infoLog.split('\n');
         
         for (const line of lines) {
@@ -276,6 +276,37 @@ const glslValidator = (code: string, type: 'vertex' | 'fragment'): any[] => {
     gl.deleteShader(shader);
     return errors;
 };
+
+const PROMPT_CATEGORIES = {
+    material: ['Metal', 'Wood', 'Stone', 'Fabric', 'Glass', 'Liquid', 'Plasma', 'Crystal', 'Hair', 'Fur', 'Skin', 'Slime', 'Energy', 'Bone', 'Ice', 'Coral', 'Paper', 'Leather', 'Ceramic', 'Meteorite', 'Damascus Steel', 'Petrified Wood', 'Obsidian', 'Geode', 'Nanoweave', 'Cracked Glass', 'Quicksilver', 'Ectoplasm'],
+    finish: ['Polished', 'Rough', 'Matte', 'Anisotropic', 'Pearlescent', 'Wet', 'Dusty', 'Scratched', 'Corroded', 'Oily', 'Varnished', 'Crystalline', 'Sandy', 'Chipped', 'Embossed', 'Engraved'],
+    effect: ['Glowing', 'Pulsating', 'Flowing', 'Shimmering', 'Cracking with light', 'Dissolving', 'Morphing', 'Breathing', 'Electric Arcs', 'Emitting Particles', 'Swirling', 'Bubbling', 'Freezing', 'Burning', 'Glitching', 'Pixelating'],
+    pattern: ['Hexagonal tiles', 'Organic veins', 'Alien circuits', 'Wood grain', 'Fish scales', 'Fractal patterns', 'Hieroglyphics', 'Woven patterns', 'Honeycomb', 'Giger-esque biomechanical', 'Tessellated geometry', 'Camouflage', 'Paisley', 'Cracks', 'Craters', 'Topographical lines'],
+    mood: ['Celestial', 'Abyssal', 'Volcanic', 'Botanical', 'Technological', 'Anatomical', 'Architectural', 'Ghostly', 'Glacial', 'Ancient', 'Futuristic', 'Magical', 'Corrupted', 'Dreamlike', 'Eldritch', 'Sacred', 'Industrial', 'Steampunk', 'Post-apocalyptic', 'Fairy-tale']
+};
+
+const generateRandomAiPrompt = (): string => {
+    const getRandomItem = (arr: string[]): string => arr[Math.floor(Math.random() * arr.length)];
+
+    // Pick 3 to 4 categories to ensure variety in the prompt's structure
+    const numCategories = 3 + Math.floor(Math.random() * 2);
+    const selectedCategoryKeys = (Object.keys(PROMPT_CATEGORIES) as (keyof typeof PROMPT_CATEGORIES)[])
+        .sort(() => 0.5 - Math.random()) // Shuffle the keys
+        .slice(0, numCategories); // Pick the first N keys
+
+    // Get a random element from each chosen category
+    const elements = selectedCategoryKeys.map(cat => getRandomItem(PROMPT_CATEGORIES[cat]));
+    
+    // Construct the final prompt for the AI
+    return `You are a creative art director. Your task is to take a set of keywords and expand them into a single, short, and highly imaginative prompt for a GLSL shader effect. Be descriptive and vivid.
+    
+Keywords: "${elements.join(', ')}"
+
+Example Output for "Polished, Obsidian, Glowing": 'A polished obsidian stone surface with ethereal pastel veins cracking and glowing from within.'
+
+Return ONLY the raw text for the final prompt. Do not include any extra words, formatting, or explanations.`;
+};
+
 
 // FIX: Removed `: React.FC` to simplify the component definition and avoid potential complex type-checking issues.
 const App = () => {
@@ -305,7 +336,7 @@ const App = () => {
     const [shaderName, setShaderName] = useState<string>('');
     const [savedShaders, setSavedShaders] = useState<SavedShader[]>([]);
     const [selectedShader, setSelectedShader] = useState<string>('');
-    const [panelOrder, setPanelOrder] = useState<string[]>(['ai', 'scene', 'project']);
+    const [panelOrder, setPanelOrder] = useState<string[]>(['settings', 'ai', 'scene', 'project']);
     const [collapsedPanels, setCollapsedPanels] = useState<Record<string, boolean>>({});
     const [postProcessingState, setPostProcessingState] = useState({
         bloom: { enabled: false, threshold: 0.8, weight: 0.3, kernel: 64 },
@@ -314,7 +345,7 @@ const App = () => {
         chromaticAberration: { enabled: false, aberrationAmount: 30 },
     });
     const [selectedPreset, setSelectedPreset] = useState<string>('');
-    const [llmProvider, setLlmProvider] = useState<'gemini' | 'local' | 'lmstudio'>(() => getInitialState('shadercraft_llm_provider', 'gemini'));
+    const [llmProvider, setLlmProvider] = useState<'gemini' | 'local' | 'lmstudio' | 'openai'>(() => getInitialState('shadercraft_llm_provider', 'gemini'));
     const [localLlmEndpoint, setLocalLlmEndpoint] = useState<string>(() => getInitialState('shadercraft_llm_endpoint', 'http://localhost:11434/api/generate'));
     const [localLlmModel, setLocalLlmModel] = useState<string>(() => getInitialState('shadercraft_llm_model', 'codellama'));
     const [localLlmStatus, setLocalLlmStatus] = useState<'unchecked' | 'connected' | 'error'>('unchecked');
@@ -323,6 +354,11 @@ const App = () => {
     const [selectedLmStudioModel, setSelectedLmStudioModel] = useState<string>(() => getInitialState('shadercraft_lmstudio_model', ''));
     const [lmStudioModels, setLmStudioModels] = useState<string[]>([]);
     const [isFetchingLmStudioModels, setIsFetchingLmStudioModels] = useState<boolean>(false);
+    const [openAiUrl, setOpenAiUrl] = useState<string>(() => getInitialState('shadercraft_openai_url', 'http://localhost:8000/v1'));
+    const [openAiModel, setOpenAiModel] = useState<string>(() => getInitialState('shadercraft_openai_model', ''));
+    const [openAiStatus, setOpenAiStatus] = useState<'unchecked' | 'connected' | 'error'>('unchecked');
+    const [openAiModels, setOpenAiModels] = useState<string[]>([]);
+    const [isFetchingOpenAiModels, setIsFetchingOpenAiModels] = useState<boolean>(false);
 
 
     // State for AI Refinement
@@ -335,10 +371,21 @@ const App = () => {
     // State for Time Control
     const [timeState, setTimeState] = useState({ playing: true, time: 0.0 });
     
+    // State for custom confirmation modal
+    const [confirmModalState, setConfirmModalState] = useState({
+        isOpen: false,
+        title: '',
+        message: '',
+        onConfirm: () => {},
+    });
+
     // Unique error message identifiers for structured feedback
     const GEMINI_RATE_LIMIT_ERROR_MESSAGE = 'GEMINI_RATE_LIMIT_ERROR';
     const LMSTUDIO_CONNECTION_ERROR_MESSAGE = `LMSTUDIO_CONNECTION_ERROR`;
+    const LMSTUDIO_INVALID_URL_ERROR_MESSAGE = `LMSTUDIO_INVALID_URL_ERROR`;
     const LOCAL_LLM_CONNECTION_ERROR_MESSAGE = "LOCAL_LLM_CONNECTION_ERROR";
+    const OPENAI_CONNECTION_ERROR_MESSAGE = "OPENAI_CONNECTION_ERROR";
+    const OPENAI_INVALID_URL_ERROR_MESSAGE = "OPENAI_INVALID_URL_ERROR";
     const TIMEOUT_ERROR_MESSAGE = "TIMEOUT_ERROR";
 
 
@@ -383,7 +430,9 @@ const App = () => {
         localStorage.setItem('shadercraft_llm_model', JSON.stringify(localLlmModel));
         localStorage.setItem('shadercraft_lmstudio_url', JSON.stringify(lmStudioUrl));
         localStorage.setItem('shadercraft_lmstudio_model', JSON.stringify(selectedLmStudioModel));
-    }, [llmProvider, localLlmEndpoint, localLlmModel, lmStudioUrl, selectedLmStudioModel]);
+        localStorage.setItem('shadercraft_openai_url', JSON.stringify(openAiUrl));
+        localStorage.setItem('shadercraft_openai_model', JSON.stringify(openAiModel));
+    }, [llmProvider, localLlmEndpoint, localLlmModel, lmStudioUrl, selectedLmStudioModel, openAiUrl, openAiModel]);
 
     // Test local LLM (Ollama) connection
     useEffect(() => {
@@ -421,6 +470,70 @@ const App = () => {
         };
     }, [localLlmEndpoint, llmProvider]);
 
+    const fetchOpenAiModels = useCallback(async () => {
+        if (!openAiUrl || llmProvider !== 'openai') {
+            setOpenAiStatus('unchecked');
+            setOpenAiModels([]);
+            return;
+        }
+
+        setIsFetchingOpenAiModels(true);
+        setOpenAiStatus('unchecked');
+        setError('');
+
+        let modelsUrl;
+        try {
+            const url = new URL(openAiUrl);
+            // This logic assumes the user provides a URL ending in /v1, as instructed in the UI.
+            modelsUrl = new URL('models', `${url.href}${url.pathname.endsWith('/') ? '' : '/'}`).toString();
+        } catch (e) {
+            setError(OPENAI_INVALID_URL_ERROR_MESSAGE);
+            setOpenAiStatus('error');
+            setOpenAiModels([]);
+            setIsFetchingOpenAiModels(false);
+            return;
+        }
+
+        try {
+            const response = await fetch(modelsUrl, {
+                signal: AbortSignal.timeout(15000) // 15 second timeout
+            });
+
+            if (!response.ok) throw new Error(`Server responded with status: ${response.status}`);
+
+            const data = await response.json();
+            const models = data.data?.map((model: any) => model.id) || [];
+
+            if (models.length === 0) throw new Error("No models found on the server.");
+
+            setOpenAiModels(models);
+            setOpenAiStatus('connected');
+
+            // Auto-select model
+            const currentModel = getInitialState('shadercraft_openai_model', '');
+            if (models.includes(currentModel)) {
+                setOpenAiModel(currentModel);
+            } else {
+                setOpenAiModel(models[0]);
+            }
+
+        } catch (err: any) {
+            console.error("OpenAI Compatible Server connection/fetch error:", err);
+            if (err.name === 'TimeoutError' || (err instanceof DOMException && err.name === 'AbortError')) {
+                setError(TIMEOUT_ERROR_MESSAGE);
+            } else if (err instanceof TypeError && err.message === 'Failed to fetch') {
+                setError(OPENAI_CONNECTION_ERROR_MESSAGE);
+            } else {
+                setError(err.message || 'An unknown error occurred while connecting to the server.');
+            }
+            setOpenAiStatus('error');
+            setOpenAiModels([]);
+        } finally {
+            setIsFetchingOpenAiModels(false);
+        }
+    }, [openAiUrl, llmProvider, OPENAI_CONNECTION_ERROR_MESSAGE, OPENAI_INVALID_URL_ERROR_MESSAGE, TIMEOUT_ERROR_MESSAGE]);
+
+
     const fetchLmStudioModels = useCallback(async () => {
         if (!lmStudioUrl || llmProvider !== 'lmstudio') {
             setLmStudioStatus('unchecked');
@@ -431,9 +544,19 @@ const App = () => {
         setIsFetchingLmStudioModels(true);
         setLmStudioStatus('unchecked'); // Show as checking
         setError(''); // Clear previous errors
+        
+        let url;
+        try {
+            url = new URL('/v1/models', lmStudioUrl).toString();
+        } catch (e) {
+            setError(LMSTUDIO_INVALID_URL_ERROR_MESSAGE);
+            setLmStudioStatus('error');
+            setLmStudioModels([]);
+            setIsFetchingLmStudioModels(false);
+            return;
+        }
 
         try {
-            const url = new URL('/v1/models', lmStudioUrl).toString();
             const response = await fetch(url, {
                 signal: AbortSignal.timeout(15000) // 15 second timeout for fetching models
             });
@@ -470,7 +593,7 @@ const App = () => {
         } finally {
             setIsFetchingLmStudioModels(false);
         }
-    }, [lmStudioUrl, llmProvider, LMSTUDIO_CONNECTION_ERROR_MESSAGE, TIMEOUT_ERROR_MESSAGE]);
+    }, [lmStudioUrl, llmProvider, LMSTUDIO_CONNECTION_ERROR_MESSAGE, LMSTUDIO_INVALID_URL_ERROR_MESSAGE, TIMEOUT_ERROR_MESSAGE]);
 
     // Effect to auto-fetch LM Studio models when URL or provider changes
     useEffect(() => {
@@ -485,6 +608,20 @@ const App = () => {
         }
     }, [lmStudioUrl, llmProvider, fetchLmStudioModels]);
 
+    // Effect to auto-fetch OpenAI models when URL or provider changes
+    useEffect(() => {
+        if (llmProvider === 'openai') {
+            const timeoutId = setTimeout(() => {
+                fetchOpenAiModels();
+            }, 500); // Debounce
+            return () => clearTimeout(timeoutId);
+        } else {
+            setOpenAiStatus('unchecked');
+            setOpenAiModels([]);
+        }
+    }, [openAiUrl, llmProvider, fetchOpenAiModels]);
+
+
     // Load saved shaders from localStorage on initial mount
     useEffect(() => {
         setSavedShaders(getInitialState('shadercraft_shaders', []));
@@ -494,6 +631,33 @@ const App = () => {
     useEffect(() => {
         setError('');
     }, [llmProvider]);
+
+    // --- Custom Confirmation Modal Handlers ---
+    const showConfirmModal = (title: string, message: string, onConfirm: () => void) => {
+        setConfirmModalState({ isOpen: true, title, message, onConfirm });
+    };
+    
+    const closeConfirmModal = () => {
+        setConfirmModalState({ isOpen: false, title: '', message: '', onConfirm: () => {} });
+    };
+    
+    const handleConfirmAction = () => {
+        confirmModalState.onConfirm();
+        closeConfirmModal();
+    };
+
+    const handleClearShaders = () => {
+        showConfirmModal(
+            'Clear Shaders',
+            'Are you sure you want to clear both shader editors? This action cannot be undone.',
+            () => {
+                setVertexCode('');
+                setFragmentCode('');
+                if (vertexCmRef.current) vertexCmRef.current.setValue('');
+                if (fragmentCmRef.current) fragmentCmRef.current.setValue('');
+            }
+        );
+    };
 
     const handleSaveShader = () => {
         if (!shaderName.trim()) {
@@ -551,12 +715,16 @@ const App = () => {
             alert("Please select a shader to delete.");
             return;
         }
-        if (window.confirm(`Are you sure you want to delete the shader "${selectedShader}"?`)) {
-            const updatedShaders = savedShaders.filter(s => s.name !== selectedShader);
-            setSavedShaders(updatedShaders);
-            localStorage.setItem('shadercraft_shaders', JSON.stringify(updatedShaders));
-            setSelectedShader(''); // Reset selection
-        }
+        showConfirmModal(
+            'Delete Shader',
+            `Are you sure you want to delete the shader "${selectedShader}"?`,
+            () => {
+                const updatedShaders = savedShaders.filter(s => s.name !== selectedShader);
+                setSavedShaders(updatedShaders);
+                localStorage.setItem('shadercraft_shaders', JSON.stringify(updatedShaders));
+                setSelectedShader(''); // Reset selection
+            }
+        );
     };
 
     const handleExportShader = () => {
@@ -619,32 +787,39 @@ const App = () => {
                 };
 
                 const existingShaderIndex = savedShaders.findIndex(s => s.name === newShader.name);
-                let updatedShaders;
+                
+                const finishImport = (shaderToSave: SavedShader, isOverwrite: boolean) => {
+                    let updatedShaders;
+                    if (isOverwrite) {
+                        const index = savedShaders.findIndex(s => s.name === shaderToSave.name);
+                        updatedShaders = [...savedShaders];
+                        updatedShaders[index] = shaderToSave;
+                    } else {
+                        updatedShaders = [...savedShaders, shaderToSave];
+                    }
+
+                    setSavedShaders(updatedShaders);
+                    localStorage.setItem('shadercraft_shaders', JSON.stringify(updatedShaders));
+                    
+                    setSelectedShader(shaderToSave.name);
+                    setVertexCode(shaderToSave.vertex);
+                    setFragmentCode(shaderToSave.fragment);
+                    if (shaderToSave.material) {
+                        setMaterialState(shaderToSave.material);
+                    }
+                    
+                    alert(`Shader "${shaderToSave.name}" ${isOverwrite ? 'overwritten' : 'imported'} successfully!`);
+                };
 
                 if (existingShaderIndex > -1) {
-                    // If a shader with the same name exists, ask for confirmation to overwrite
-                    if (!window.confirm(`A shader named "${newShader.name}" already exists. Do you want to overwrite it?`)) {
-                        return; // User canceled the overwrite
-                    }
-                    updatedShaders = [...savedShaders];
-                    updatedShaders[existingShaderIndex] = newShader;
+                    showConfirmModal(
+                        'Overwrite Shader?',
+                        `A shader named "${newShader.name}" already exists. Do you want to overwrite it?`,
+                        () => finishImport(newShader, true)
+                    );
                 } else {
-                    // Add the new shader to the list
-                    updatedShaders = [...savedShaders, newShader];
+                    finishImport(newShader, false);
                 }
-
-                setSavedShaders(updatedShaders);
-                localStorage.setItem('shadercraft_shaders', JSON.stringify(updatedShaders));
-                
-                // Automatically select and load the newly imported shader for immediate use
-                setSelectedShader(newShader.name);
-                setVertexCode(newShader.vertex);
-                setFragmentCode(newShader.fragment);
-                if (newShader.material) {
-                    setMaterialState(newShader.material);
-                }
-                
-                alert(`Shader "${newShader.name}" imported successfully!`);
 
             } catch (err: any) {
                 console.error("Failed to import shader:", err);
@@ -1054,29 +1229,6 @@ const App = () => {
             if (activeTab === 'fragment') fragmentCmRef.current?.refresh();
         }, 1);
     }, [activeTab]);
-
-    const formatGlslCode = async (code: string): Promise<string> => {
-        try {
-            // Prettier and its plugins are loaded from the CDN and available globally
-            return await prettier.format(code, {
-                parser: 'glsl-parse',
-                plugins: [prettierPlugins.glsl],
-            });
-        } catch (error) {
-            console.warn('Prettier GLSL formatting failed:', error);
-            return code; // Fallback to unformatted code on error
-        }
-    };
-
-    const handleFormatCode = async () => {
-        if (activeTab === 'vertex') {
-            const formatted = await formatGlslCode(vertexCode);
-            setVertexCode(formatted);
-        } else {
-            const formatted = await formatGlslCode(fragmentCode);
-            setFragmentCode(formatted);
-        }
-    };
     
     // Extracts a JSON block from a string that might be wrapped in markdown or have extraneous text.
     const extractJsonFromString = (str: string): string | null => {
@@ -1103,6 +1255,16 @@ const App = () => {
         console.error("AI Error:", error);
         const errorMessage = error instanceof Error ? error.message : String(error);
 
+        // Specific check for invalid URL constructor errors
+        if (error instanceof TypeError && (errorMessage.includes('Invalid URL') || errorMessage.includes('Failed to construct'))) {
+            if (llmProvider === 'lmstudio') {
+                setError(LMSTUDIO_INVALID_URL_ERROR_MESSAGE);
+            } else if (llmProvider === 'openai') {
+                setError(OPENAI_INVALID_URL_ERROR_MESSAGE);
+            }
+            return;
+        }
+
         if (error.name === 'TimeoutError' || (error instanceof DOMException && error.name === 'AbortError')) {
             setError(TIMEOUT_ERROR_MESSAGE);
             return;
@@ -1118,6 +1280,8 @@ const App = () => {
                 setError(LMSTUDIO_CONNECTION_ERROR_MESSAGE);
             } else if (llmProvider === 'local') {
                 setError(LOCAL_LLM_CONNECTION_ERROR_MESSAGE);
+            } else if (llmProvider === 'openai') {
+                setError(OPENAI_CONNECTION_ERROR_MESSAGE);
             } else {
                  setError(`Connection failed: ${errorMessage}`);
             }
@@ -1125,6 +1289,25 @@ const App = () => {
         }
         
         setError(`An error occurred: ${errorMessage}`);
+    };
+    
+    const formatGlslCode = (code: string) => {
+        try {
+            // Use `typeof` checks to safely verify globals without causing a ReferenceError.
+            // prettier-plugin-glsl is a standalone plugin and must be passed in an array.
+            if (typeof prettier !== 'undefined' && typeof prettierPlugins !== 'undefined' && prettierPlugins.glsl) {
+                return prettier.format(code, {
+                    parser: 'glsl-parser',
+                    plugins: [prettierPlugins.glsl],
+                });
+            } else {
+                console.warn('Prettier or prettier-plugin-glsl not available.');
+                return code; // Return original code if formatter is not available
+            }
+        } catch (e) {
+            console.error('Error formatting GLSL code:', e);
+            return code; // Return original code on formatting error
+        }
     };
 
     const handleGenerateShader = async () => {
@@ -1139,6 +1322,7 @@ const App = () => {
 Please provide the complete GLSL code for both the vertex and fragment shaders.
 
 - CRITICAL: DO NOT include the \`#version\` directive (e.g., \`#version 300 es\`) at the top of the shader code. Babylon.js handles this automatically.
+- CRITICAL: Ensure the generated GLSL code is syntactically perfect. Pay close attention to matching parentheses (), brackets [], and semicolons. All function calls must have the correct number of arguments.
 - The vertex shader MUST define \`gl_Position\`.
 - It will receive attributes: \`vec3 position\`, \`vec3 normal\`, \`vec2 uv\`.
 - It MUST pass a varying \`vUV\` (\`vec2\`), \`vNormal\` (\`vec3\`), and \`vPositionW\` (\`vec3\`) to the fragment shader.
@@ -1216,6 +1400,36 @@ ${fragmentCode}
                     throw new Error("LM Studio returned an empty or invalid response structure.");
                 }
                 rawResponseText = content;
+            } else if (llmProvider === 'openai') {
+                 if (openAiStatus !== 'connected' || !openAiModel) {
+                    throw new Error(OPENAI_CONNECTION_ERROR_MESSAGE);
+                }
+                const url = new URL('chat/completions', `${openAiUrl}${openAiUrl.endsWith('/') ? '' : '/'}`).toString();
+                const response = await fetch(url, {
+                    method: 'POST',
+                    signal: controller.signal,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: openAiModel,
+                        messages: [
+                            { role: 'system', content: systemInstruction },
+                            { role: 'user', content: userContent }
+                        ],
+                        stream: false,
+                        response_format: { type: 'json_object' }
+                    })
+                });
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`OpenAI API request failed: ${response.statusText} - ${errorText}`);
+                }
+                const responseData = await response.json();
+                const content = responseData.choices?.[0]?.message?.content;
+                if (!content) {
+                    throw new Error("OpenAI API returned an empty or invalid response structure.");
+                }
+                rawResponseText = content;
+
             } else { // Local LLM (Ollama) provider
                 if (localLlmStatus !== 'connected') {
                     throw new Error(LOCAL_LLM_CONNECTION_ERROR_MESSAGE);
@@ -1251,10 +1465,8 @@ ${fragmentCode}
             const shaderData = JSON.parse(jsonString);
 
             if (shaderData.vertexShader && shaderData.fragmentShader) {
-                const formattedVertex = await formatGlslCode(shaderData.vertexShader);
-                const formattedFragment = await formatGlslCode(shaderData.fragmentShader);
-                setVertexCode(formattedVertex);
-                setFragmentCode(formattedFragment);
+                setVertexCode(formatGlslCode(shaderData.vertexShader));
+                setFragmentCode(formatGlslCode(shaderData.fragmentShader));
                 setSelectedPreset(''); // Clear preset selection after generating
                  // Reset material to a neutral default when generating a new shader
                 setMaterialState({ albedo: '#b3b3b3', metallic: 0.1, roughness: 0.5 });
@@ -1274,7 +1486,7 @@ ${fragmentCode}
         setError('');
 
         const content = action === 'random'
-            ? "Generate a single, short, and creative prompt for a GLSL shader effect. Be descriptive and inspiring. Draw from themes like: glows, flows, organic growth, waves, tiles, natural textures (wood, stone), metals, and intricate patterns. Examples: 'shimmering iridescent fish scales', 'molten lava slowly cracking', 'glowing alien circuits', 'polished mahogany wood grain', 'rippling water with caustic patterns', 'swirling magical energy shield'. Return ONLY the raw text content for the prompt. Do not include any extra words, formatting, escaped symbols, or XML data."
+            ? generateRandomAiPrompt()
             : `You are a creative assistant for a 3D artist. Take the following shader idea and enhance it, making it more descriptive, vivid, and inspiring, but keep it as a concise prompt. User's idea: "${prompt}". Return ONLY the raw, enhanced prompt text. Do not include any introductory phrases, escaped symbols, or XML data.`;
         
         try {
@@ -1287,9 +1499,8 @@ ${fragmentCode}
                 const response = await ai.models.generateContent({
                     model: "gemini-2.5-flash",
                     contents: content,
-                    // Add temperature for more creative random prompts
                     config: {
-                        temperature: action === 'random' ? 0.9 : undefined,
+                        temperature: action === 'random' ? 1.0 : undefined,
                     }
                 });
                 resultText = response.text;
@@ -1304,7 +1515,7 @@ ${fragmentCode}
                     stream: false
                 };
                 if (action === 'random') {
-                    requestBody.temperature = 0.9;
+                    requestBody.temperature = 1.0;
                 }
                 const response = await fetch(url, {
                     method: 'POST',
@@ -1318,6 +1529,32 @@ ${fragmentCode}
                 }
                 const data = await response.json();
                 resultText = data.choices?.[0]?.message?.content || '';
+            } else if (llmProvider === 'openai') {
+                 if (openAiStatus !== 'connected' || !openAiModel) {
+                    throw new Error(OPENAI_CONNECTION_ERROR_MESSAGE);
+                }
+                const url = new URL('chat/completions', `${openAiUrl}${openAiUrl.endsWith('/') ? '' : '/'}`).toString();
+                 const requestBody: any = {
+                    model: openAiModel,
+                    messages: [{ role: 'user', content: content }],
+                    stream: false
+                };
+                if (action === 'random') {
+                    requestBody.temperature = 1.0;
+                }
+                const response = await fetch(url, {
+                    method: 'POST',
+                    signal: controller.signal,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`OpenAI API request failed: ${response.statusText} - ${errorText}`);
+                }
+                const data = await response.json();
+                resultText = data.choices?.[0]?.message?.content || '';
+
             } else { // Local LLM (Ollama)
                 if (localLlmStatus !== 'connected') {
                     throw new Error(LOCAL_LLM_CONNECTION_ERROR_MESSAGE);
@@ -1329,9 +1566,7 @@ ${fragmentCode}
                     stream: false
                 };
                 if (action === 'random') {
-                    // Add temperature for more creative random prompts
-                    // Note: The property might be 'temperature' or inside 'options' depending on the local server.
-                    requestBody.temperature = 0.9;
+                    requestBody.temperature = 1.0;
                 }
 
                 const response = await fetch(localLlmEndpoint, {
@@ -1379,6 +1614,19 @@ ${fragmentCode}
     const closeRefineModal = () => {
         setRefineModalOpen(false);
         setRefinementSelection(null);
+    };
+    
+    const handleFormatCode = () => {
+        if (activeTab === 'vertex') {
+            const formatted = formatGlslCode(vertexCode);
+            setVertexCode(formatted);
+            // Also update the editor instance directly
+            vertexCmRef.current?.setValue(formatted);
+        } else {
+            const formatted = formatGlslCode(fragmentCode);
+            setFragmentCode(formatted);
+            fragmentCmRef.current?.setValue(formatted);
+        }
     };
 
     const handleRefineCode = async () => {
@@ -1445,6 +1693,33 @@ ${refinementSelection.code}
                 const content = data.choices?.[0]?.message?.content || '';
 
                 // Defensively strip markdown in case the model adds it
+                const markdownMatch = content.match(/```(?:glsl)?\s*([\s\S]*?)\s*```/);
+                refinedCode = markdownMatch ? markdownMatch[1].trim() : content.trim();
+
+            } else if (llmProvider === 'openai') {
+                 if (openAiStatus !== 'connected' || !openAiModel) {
+                    throw new Error(OPENAI_CONNECTION_ERROR_MESSAGE);
+                }
+                const url = new URL('chat/completions', `${openAiUrl}${openAiUrl.endsWith('/') ? '' : '/'}`).toString();
+                const response = await fetch(url, {
+                    method: 'POST',
+                    signal: controller.signal,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: openAiModel,
+                        messages: [
+                            { role: 'system', content: systemInstruction },
+                            { role: 'user', content: userContent }
+                        ],
+                        stream: false,
+                    })
+                });
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`OpenAI API request failed: ${response.statusText} - ${errorText}`);
+                }
+                const data = await response.json();
+                const content = data.choices?.[0]?.message?.content || '';
                 const markdownMatch = content.match(/```(?:glsl)?\s*([\s\S]*?)\s*```/);
                 refinedCode = markdownMatch ? markdownMatch[1].trim() : content.trim();
 
@@ -1618,8 +1893,8 @@ ${refinementSelection.code}
                         let content: React.ReactNode;
 
                         switch (key) {
-                            case 'ai':
-                                title = 'AI Controls';
+                            case 'settings':
+                                title = 'Settings';
                                 content = (
                                     <>
                                         <div className="form-group">
@@ -1627,16 +1902,16 @@ ${refinementSelection.code}
                                             <select
                                                 id="llm-provider-select"
                                                 value={llmProvider}
-                                                onChange={(e) => setLlmProvider(e.target.value as 'gemini' | 'local' | 'lmstudio')}
+                                                onChange={(e) => setLlmProvider(e.target.value as 'gemini' | 'local' | 'lmstudio' | 'openai')}
                                             >
                                                 <option value="gemini">Gemini API</option>
                                                 <option value="lmstudio">LM Studio</option>
+                                                <option value="openai">OpenAI Compatible</option>
                                                 <option value="local">Local LLM (Ollama)</option>
                                             </select>
                                         </div>
-                                        
-                                        {/* --- UNIFIED ERROR DISPLAY --- */}
-                                        {error && (
+
+                                        {llmProvider === 'gemini' && error && (
                                             <>
                                                 {error === GEMINI_RATE_LIMIT_ERROR_MESSAGE && (
                                                     <div className="error-message-inline structured-error">
@@ -1645,50 +1920,52 @@ ${refinementSelection.code}
                                                         <p>For more information, see the <a href="https://ai.google.dev/gemini-api/docs/rate-limits" target="_blank" rel="noopener noreferrer">Gemini API Rate Limits documentation</a>.</p>
                                                     </div>
                                                 )}
-                                                {error === LMSTUDIO_CONNECTION_ERROR_MESSAGE && (
-                                                    <div className="error-message-inline structured-error">
-                                                        <strong>LM Studio Connection Failed</strong>
-                                                        <p>This is a network issue, most likely related to CORS. Please check the following:</p>
-                                                        <ul>
-                                                            <li>In the LM Studio app, go to the "Server" tab and <strong>check the "Enable CORS" box</strong>. This is the most common fix.</li>
-                                                            <li>Ensure the LM Studio server is running.</li>
-                                                            <li>Verify the Server URL below is correct.</li>
-                                                            <li>Check for firewalls blocking the connection.</li>
-                                                        </ul>
-                                                    </div>
-                                                )}
-                                                {error === LOCAL_LLM_CONNECTION_ERROR_MESSAGE && (
-                                                    <div className="error-message-inline structured-error">
-                                                        <strong>Local LLM Connection Failed</strong>
-                                                        <p>This is a network issue. Please check the following:</p>
-                                                        <ul>
-                                                            <li>Is your local server (e.g., Ollama) running?</li>
-                                                            <li>Is the Endpoint URL below correct?</li>
-                                                            <li>Your server may need to be configured to allow requests from this web page (CORS).</li>
-                                                        </ul>
-                                                    </div>
-                                                )}
-                                                {error === TIMEOUT_ERROR_MESSAGE && (
-                                                    <div className="error-message-inline structured-error">
-                                                        <strong>Request Timed Out</strong>
-                                                        <p>The request to the AI model took too long to respond. This can happen for several reasons:</p>
-                                                        <ul>
-                                                            <li>The AI model is very large and is still loading into memory.</li>
-                                                            <li>The task is very complex and requires a lot of computation.</li>
-                                                            <li>Your network connection to the server is slow.</li>
-                                                        </ul>
-                                                         <p>Please try again in a moment. If the problem persists, consider using a smaller model.</p>
-                                                    </div>
-                                                )}
-                                                {/* Fallback for other, unexpected errors */}
-                                                {![GEMINI_RATE_LIMIT_ERROR_MESSAGE, LMSTUDIO_CONNECTION_ERROR_MESSAGE, LOCAL_LLM_CONNECTION_ERROR_MESSAGE, TIMEOUT_ERROR_MESSAGE].includes(error) && (
+                                                {![GEMINI_RATE_LIMIT_ERROR_MESSAGE].includes(error) && (
                                                     <pre className="error-message-inline">{error}</pre>
                                                 )}
                                             </>
                                         )}
 
+
                                         <div className={`effect-options ${llmProvider === 'lmstudio' ? 'visible' : ''}`}>
                                             <div>
+                                                {llmProvider === 'lmstudio' && error && (
+                                                    <>
+                                                        {error === LMSTUDIO_CONNECTION_ERROR_MESSAGE && (
+                                                            <div className="error-message-inline structured-error">
+                                                                <strong>LM Studio Connection Failed</strong>
+                                                                <p>This is a network issue, most likely related to CORS. Please check the following:</p>
+                                                                <ul>
+                                                                    <li>In the LM Studio app, go to the "Server" tab and <strong>check the "Enable CORS" box</strong>. This is the most common fix.</li>
+                                                                    <li>Ensure the LM Studio server is running.</li>
+                                                                    <li>Verify the Server URL below is correct.</li>
+                                                                    <li>Check for firewalls blocking the connection.</li>
+                                                                </ul>
+                                                            </div>
+                                                        )}
+                                                        {error === LMSTUDIO_INVALID_URL_ERROR_MESSAGE && (
+                                                            <div className="error-message-inline structured-error">
+                                                                <strong>Invalid LM Studio URL</strong>
+                                                                <p>The server URL is not valid. Please ensure it is a full URL, including the protocol (e.g., <code>http://</code> or <code>https://</code>).</p>
+                                                                <p>Example: <code>http://localhost:1234</code></p>
+                                                            </div>
+                                                        )}
+                                                        {error === TIMEOUT_ERROR_MESSAGE && (
+                                                            <div className="error-message-inline structured-error">
+                                                                <strong>Request Timed Out</strong>
+                                                                <p>The request to the AI model took too long to respond. This can happen for several reasons:</p>
+                                                                <ul>
+                                                                    <li>The AI model is very large and is still loading into memory.</li>
+                                                                    <li>Your network connection to the server is slow.</li>
+                                                                </ul>
+                                                                <p>Please try again in a moment. If the problem persists, consider using a smaller model.</p>
+                                                            </div>
+                                                        )}
+                                                        {![LMSTUDIO_CONNECTION_ERROR_MESSAGE, LMSTUDIO_INVALID_URL_ERROR_MESSAGE, TIMEOUT_ERROR_MESSAGE].includes(error) && (
+                                                            <pre className="error-message-inline">{error}</pre>
+                                                        )}
+                                                    </>
+                                                )}
                                                 <div className="form-group">
                                                     <label htmlFor="lmstudio-url">Server URL</label>
                                                     <div className="input-with-status">
@@ -1731,9 +2008,114 @@ ${refinementSelection.code}
                                                 </p>
                                             </div>
                                         </div>
+
+                                        <div className={`effect-options ${llmProvider === 'openai' ? 'visible' : ''}`}>
+                                            <div>
+                                                 {llmProvider === 'openai' && error && (
+                                                    <>
+                                                        {error === OPENAI_CONNECTION_ERROR_MESSAGE && (
+                                                            <div className="error-message-inline structured-error">
+                                                                <strong>OpenAI Server Connection Failed</strong>
+                                                                <p>Could not connect to the specified server. Please check the following:</p>
+                                                                <ul>
+                                                                    <li>Is your local server (e.g., Jan, GPT4All) running?</li>
+                                                                    <li>Is the Base URL below correct? It must point to the API version path (e.g. <code>/v1</code>).</li>
+                                                                    <li>Your server may need to be configured to allow requests from this web page (CORS).</li>
+                                                                </ul>
+                                                            </div>
+                                                        )}
+                                                        {error === OPENAI_INVALID_URL_ERROR_MESSAGE && (
+                                                            <div className="error-message-inline structured-error">
+                                                                <strong>Invalid OpenAI Base URL</strong>
+                                                                <p>The server URL is not valid. Please ensure it is a full URL, including the protocol (e.g., <code>http://</code>) and the API version path (e.g., <code>/v1</code>).</p>
+                                                                <p>Example: <code>http://localhost:8000/v1</code></p>
+                                                            </div>
+                                                        )}
+                                                        {error === TIMEOUT_ERROR_MESSAGE && (
+                                                            <div className="error-message-inline structured-error">
+                                                                <strong>Request Timed Out</strong>
+                                                                <p>The request to the AI model took too long to respond. This can happen for several reasons:</p>
+                                                                <ul>
+                                                                    <li>The AI model is very large and is still loading into memory.</li>
+                                                                    <li>Your network connection to the server is slow.</li>
+                                                                </ul>
+                                                                <p>Please try again in a moment. If the problem persists, consider using a smaller model.</p>
+                                                            </div>
+                                                        )}
+                                                        {![OPENAI_CONNECTION_ERROR_MESSAGE, OPENAI_INVALID_URL_ERROR_MESSAGE, TIMEOUT_ERROR_MESSAGE].includes(error) && (
+                                                            <pre className="error-message-inline">{error}</pre>
+                                                        )}
+                                                    </>
+                                                )}
+                                                <div className="form-group">
+                                                    <label htmlFor="openai-url">Base URL</label>
+                                                    <div className="input-with-status">
+                                                        <input
+                                                            id="openai-url"
+                                                            type="text"
+                                                            value={openAiUrl}
+                                                            onChange={(e) => setOpenAiUrl(e.target.value)}
+                                                            placeholder="http://localhost:8000/v1"
+                                                        />
+                                                        <span className={`connection-status ${openAiStatus}`} title={
+                                                            openAiStatus === 'connected' ? 'Connected' :
+                                                            openAiStatus === 'error' ? 'Connection Failed' : 'Checking...'
+                                                        }></span>
+                                                    </div>
+                                                </div>
+                                                <div className="form-group">
+                                                    <div className="prompt-label-group">
+                                                        <label htmlFor="openai-model">Model Name</label>
+                                                         <button onClick={() => fetchOpenAiModels()} disabled={isFetchingOpenAiModels || !openAiUrl} className="button-small">
+                                                            {isFetchingOpenAiModels ? <span className="loader" /> : 'Refresh'}
+                                                        </button>
+                                                    </div>
+                                                    <select
+                                                        id="openai-model"
+                                                        value={openAiModel}
+                                                        onChange={(e) => setOpenAiModel(e.target.value)}
+                                                        disabled={isFetchingOpenAiModels || openAiModels.length === 0}
+                                                    >
+                                                        {isFetchingOpenAiModels && <option>Fetching models...</option>}
+                                                        {!isFetchingOpenAiModels && openAiStatus === 'error' && <option>Could not load models</option>}
+                                                        {!isFetchingOpenAiModels && openAiStatus === 'connected' && openAiModels.length === 0 && <option>No models found</option>}
+                                                        {openAiModels.map(model => (
+                                                            <option key={model} value={model}>{model}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <p className="form-hint">
+                                                    Connects to any OpenAI-API-compatible server (e.g., Jan, GPT4All). The URL must include the version path (e.g., /v1).
+                                                </p>
+                                            </div>
+                                        </div>
                                         
                                         <div className={`effect-options ${llmProvider === 'local' ? 'visible' : ''}`}>
                                             <div>
+                                                {llmProvider === 'local' && error && (
+                                                    <>
+                                                        {error === LOCAL_LLM_CONNECTION_ERROR_MESSAGE && (
+                                                            <div className="error-message-inline structured-error">
+                                                                <strong>Local LLM Connection Failed</strong>
+                                                                <p>This is a network issue. Please check the following:</p>
+                                                                <ul>
+                                                                    <li>Is your local server (e.g., Ollama) running?</li>
+                                                                    <li>Is the Endpoint URL below correct?</li>
+                                                                    <li>Your server may need to be configured to allow requests from this web page (CORS).</li>
+                                                                </ul>
+                                                            </div>
+                                                        )}
+                                                        {error === TIMEOUT_ERROR_MESSAGE && (
+                                                            <div className="error-message-inline structured-error">
+                                                                <strong>Request Timed Out</strong>
+                                                                <p>The request to your local model took too long to respond. If the problem persists, consider using a smaller model.</p>
+                                                            </div>
+                                                        )}
+                                                        {![LOCAL_LLM_CONNECTION_ERROR_MESSAGE, TIMEOUT_ERROR_MESSAGE].includes(error) && (
+                                                            <pre className="error-message-inline">{error}</pre>
+                                                        )}
+                                                    </>
+                                                )}
                                                 <div className="form-group">
                                                     <label htmlFor="local-llm-endpoint">Endpoint URL</label>
                                                     <div className="input-with-status">
@@ -1765,7 +2147,13 @@ ${refinementSelection.code}
                                                 </p>
                                             </div>
                                         </div>
-
+                                    </>
+                                );
+                                break;
+                            case 'ai':
+                                title = 'AI Controls';
+                                content = (
+                                    <>
                                         <div className="form-group">
                                             <div className="prompt-label-group">
                                                 <label htmlFor="prompt-input">Shader Prompt</label>
@@ -2190,11 +2578,14 @@ ${refinementSelection.code}
                             </button>
                         </div>
                         <div className="editor-actions">
+                            <button onClick={handleClearShaders} className="button-format" aria-label="Clear both shader editors">
+                                Clear
+                            </button>
+                             <button onClick={handleFormatCode} className="button-format" aria-label="Format current shader code">
+                                Format Code
+                            </button>
                             <button onClick={handleOpenRefineModal} className="button-format" disabled={!hasSelection || isRefining || isLoading} aria-label="Refine selected code with AI">
                                 Refine with AI
-                            </button>
-                             <button onClick={handleFormatCode} className="button-format" aria-label="Format active shader code">
-                                Format Code
                             </button>
                         </div>
                     </div>
@@ -2213,7 +2604,7 @@ ${refinementSelection.code}
                 </section>
             </main>
             <footer className="app-footer" role="log" aria-live="assertive">
-                {error || "No errors."}
+                {isLoading || isRefining || promptActionLoading ? 'Processing...' : error ? 'Error occurred. See details in the Settings panel.' : 'Ready'}
             </footer>
 
             {refineModalOpen && (
@@ -2241,6 +2632,19 @@ ${refinementSelection.code}
                             <button onClick={handleRefineCode} disabled={!refinementPrompt || isRefining}>
                                 {isRefining ? <span className="loader" /> : 'Refine'}
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {confirmModalState.isOpen && (
+                <div className="confirm-modal-backdrop" onClick={closeConfirmModal}>
+                    <div className="confirm-modal" onClick={(e) => e.stopPropagation()}>
+                        <h3>{confirmModalState.title}</h3>
+                        <p>{confirmModalState.message}</p>
+                        <div className="confirm-modal-actions">
+                            <button onClick={closeConfirmModal} className="button-secondary">Cancel</button>
+                            <button onClick={handleConfirmAction} className="button-danger">Confirm</button>
                         </div>
                     </div>
                 </div>
