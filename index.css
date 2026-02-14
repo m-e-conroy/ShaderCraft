@@ -1,3 +1,4 @@
+
 /*
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -163,56 +164,16 @@ body {
     word-break: break-word;
 }
 
-.error-message-inline.structured-error {
-    font-family: var(--font-family);
-    white-space: normal;
-    text-align: left;
+.input-with-button {
+    display: flex;
+    gap: 0.5rem;
 }
-.structured-error > strong {
-    font-weight: 500;
-    color: var(--text-color-light);
-    display: block;
-    font-size: 0.9rem;
-    margin-bottom: 0.5rem;
+.input-with-button input {
+    flex-grow: 1;
 }
-.structured-error p {
-    font-size: 0.85rem;
-    margin-bottom: 0.5rem;
-    line-height: 1.4;
+.input-with-button button {
+    flex-shrink: 0;
 }
-.structured-error ul {
-    list-style-position: outside;
-    padding-left: 1.25rem;
-    margin: 0;
-}
-.structured-error li {
-    font-size: 0.85rem;
-    margin-bottom: 0.35rem;
-    line-height: 1.4;
-}
-.structured-error li strong {
-    display: inline;
-    font-weight: 500;
-}
-
-.structured-error a {
-    color: var(--primary-hover-color);
-    text-decoration: underline;
-}
-
-.structured-error a:hover {
-    color: var(--text-color-light);
-}
-
-.structured-error code {
-    background-color: var(--bg-color);
-    padding: 0.1rem 0.4rem;
-    border-radius: 3px;
-    font-family: var(--font-family-mono);
-    font-size: 0.8rem;
-    border: 1px solid var(--border-color);
-}
-
 
 input, textarea, select {
   width: 100%;
