@@ -963,3 +963,134 @@ input:checked + .slider:before {
         min-height: initial;
     }
 }
+
+/* Mode Toggle */
+.header-mode-toggle {
+    display: flex;
+    background: var(--bg-color);
+    border-radius: 4px;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+}
+
+.mode-button {
+    background: transparent;
+    border: none;
+    color: var(--text-color);
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+}
+
+.mode-button.active {
+    background: var(--primary-color);
+    color: #fff;
+}
+
+/* Curriculum Panel */
+.curriculum-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow-y: auto;
+}
+
+.curriculum-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.lesson-item {
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.lesson-item:hover {
+    border-color: var(--primary-color);
+}
+
+.lesson-item.active {
+    border-color: var(--primary-color);
+    background: rgba(0, 122, 204, 0.1);
+}
+
+.lesson-phase {
+    font-size: 0.75rem;
+    color: var(--primary-color);
+    margin-bottom: 0.25rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.lesson-title {
+    font-weight: 500;
+    color: var(--text-color-light);
+}
+
+/* Lesson Info Panel */
+.lesson-info-panel {
+    background: var(--bg-color);
+    border-bottom: 1px solid var(--border-color);
+    padding: 1rem;
+    flex-shrink: 0;
+    overflow-y: auto;
+    max-height: 40%;
+}
+
+.lesson-info-panel h3 {
+    color: var(--text-color-light);
+    margin-bottom: 0.5rem;
+}
+
+.lesson-info-panel p {
+    font-size: 0.9rem;
+    line-height: 1.4;
+    margin-bottom: 1rem;
+}
+
+.lesson-links, .lesson-checkpoints {
+    margin-bottom: 1rem;
+}
+
+.lesson-links strong, .lesson-checkpoints strong {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: var(--text-color-light);
+    font-size: 0.9rem;
+}
+
+.lesson-links ul, .lesson-checkpoints ul {
+    list-style: none;
+    padding-left: 0;
+}
+
+.lesson-links li, .lesson-checkpoints li {
+    margin-bottom: 0.25rem;
+    font-size: 0.9rem;
+}
+
+.lesson-links a {
+    color: var(--primary-color);
+    text-decoration: none;
+}
+
+.lesson-links a:hover {
+    text-decoration: underline;
+}
+
+.lesson-checkpoints li {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+}
+
+.lesson-checkpoints input[type="checkbox"] {
+    margin-top: 0.2rem;
+    width: auto;
+}

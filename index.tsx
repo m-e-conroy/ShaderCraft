@@ -7,6 +7,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 import { GoogleGenAI, Type } from "@google/genai";
+import { tutorials, Lesson } from '@/src/data/tutorials';
 
 declare var BABYLON: any;
 declare var pep: any;
@@ -546,6 +547,9 @@ const App = () => {
     const [refinementPrompt, setRefinementPrompt] = useState<string>('');
     const [refinementSelection, setRefinementSelection] = useState<RefinementSelection | null>(null);
 
+    const [appMode, setAppMode] = useState<'sandbox' | 'learn'>('sandbox');
+    const [activeLessonId, setActiveLessonId] = useState<string | null>(null);
+
     const [timeState, setTimeState] = useState({ playing: true, time: 0.0 });
     const [confirmModalState, setConfirmModalState] = useState({
         isOpen: false,
@@ -807,6 +811,21 @@ const App = () => {
     const handleConfirmAction = () => {
         confirmModalState.onConfirm();
         closeConfirmModal();
+    };
+
+    const handleLessonSelect = (lessonId: string) => {
+        const lesson = tutorials.find(t => t.id === lessonId);
+        if (lesson) {
+            setActiveLessonId(lessonId);
+            setVertexCode(lesson.starterVertex);
+            setFragmentCode(lesson.starterFragment);
+            if (vertexCmRef.current) vertexCmRef.current.setValue(lesson.starterVertex);
+            if (fragmentCmRef.current) fragmentCmRef.current.setValue(lesson.starterFragment);
+            setPrompt('');
+            setSelectedPreset('');
+            setSelectedTemplate('');
+            setTimeout(() => handleRunShader(), 100);
+        }
     };
 
     const handleClearShaders = () => {
@@ -1430,7 +1449,10 @@ const App = () => {
 
         const isRefinement = vertexCode !== PBR_VERTEX_SHADER || fragmentCode !== PBR_FRAGMENT_SHADER;
 
+        const activeLesson = appMode === 'learn' && activeLessonId ? tutorials.find(t => t.id === activeLessonId) : null;
+
         const systemInstruction = `You are an expert in GLSL and Babylon.js. Create GLSL shaders that will run within a Babylon.js ShaderMaterial.
+${activeLesson ? `\nROLE: You are an AI Tutor for a GLSL/Shader learning app. The user is currently on the lesson: "${activeLesson.title}".\nTUTOR CONTEXT: ${activeLesson.tutorContext}\nGuide the user and answer questions, but DO NOT just give them the final code unless they are completely stuck. If they ask a question, answer it. If they ask for code, provide hints or partial snippets.` : ''}
 
 Please provide the complete GLSL code for both the vertex and fragment shaders.
 
@@ -1709,6 +1731,10 @@ IMPORTANT: Return ONLY raw GLSL code snippet. Use proper newlines and indentatio
         <div className="app-container">
             <header className="app-header">
                 <h1>ShaderCraft AI</h1>
+                <div className="header-mode-toggle">
+                    <button className={`mode-button ${appMode === 'sandbox' ? 'active' : ''}`} onClick={() => setAppMode('sandbox')}>Sandbox</button>
+                    <button className={`mode-button ${appMode === 'learn' ? 'active' : ''}`} onClick={() => setAppMode('learn')}>Learn</button>
+                </div>
                 <div className="header-controls">
                     <button onClick={toggleInspector} className="button-secondary header-icon-button" aria-label="Toggle Babylon.js Inspector">
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
@@ -1725,8 +1751,33 @@ IMPORTANT: Return ONLY raw GLSL code snippet. Use proper newlines and indentatio
 
             <main className="main-layout">
                 <section className="panel controls-panel" aria-label="Controls">
-                    {panelOrder.map((key, index) => {
-                        let title: string;
+                    {appMode === 'learn' ? (
+                        <div className="curriculum-panel">
+                            <h2 className="panel-title">Curriculum</h2>
+                            <div className="curriculum-list">
+                                {tutorials.map(lesson => (
+                                    <div 
+                                        key={lesson.id} 
+                                        className={`lesson-item ${activeLessonId === lesson.id ? 'active' : ''}`}
+                                        onClick={() => handleLessonSelect(lesson.id)}
+                                    >
+                                        <div className="lesson-phase">{lesson.phase}</div>
+                                        <div className="lesson-title">{lesson.title}</div>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="control-divider" style={{ margin: '1rem 0' }} />
+                            <h2 className="panel-title">AI Tutor</h2>
+                            <div className="form-group">
+                                <textarea id="prompt-input" value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Ask the tutor a question..." style={{ minHeight: '80px' }} />
+                            </div>
+                            <button onClick={handleGenerateShader} disabled={isLoading || !prompt}>
+                                {isLoading ? <span className="loader" /> : 'Ask Tutor'}
+                            </button>
+                        </div>
+                    ) : (
+                        panelOrder.map((key, index) => {
+                            let title: string;
                         let content: React.ReactNode;
                         switch (key) {
                             case 'settings':
@@ -1851,7 +1902,7 @@ IMPORTANT: Return ONLY raw GLSL code snippet. Use proper newlines and indentatio
                                 </div>
                             </div>
                         )
-                    })}
+                    }))}
                 </section>
 
                 <section className="panel viewport-panel">
@@ -1859,6 +1910,34 @@ IMPORTANT: Return ONLY raw GLSL code snippet. Use proper newlines and indentatio
                 </section>
 
                 <section className="panel editor-panel">
+                    {appMode === 'learn' && activeLessonId && (
+                        <div className="lesson-info-panel">
+                            {tutorials.filter(t => t.id === activeLessonId).map(lesson => (
+                                <div key={lesson.id}>
+                                    <h3>{lesson.title}</h3>
+                                    <p>{lesson.description}</p>
+                                    {lesson.readingLinks.length > 0 && (
+                                        <div className="lesson-links">
+                                            <strong>Reading:</strong>
+                                            <ul>
+                                                {lesson.readingLinks.map((link, i) => (
+                                                    <li key={i}><a href={link.url} target="_blank" rel="noreferrer">{link.title}</a></li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+                                    <div className="lesson-checkpoints">
+                                        <strong>Checkpoints:</strong>
+                                        <ul>
+                                            {lesson.checkpoints.map((cp, i) => (
+                                                <li key={i}><input type="checkbox" id={`cp-${i}`} /> <label htmlFor={`cp-${i}`}>{cp}</label></li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                     <div className="editor-header">
                         <div className="editor-tabs">
                             <button className={`tab-button ${activeTab === 'vertex' ? 'active' : ''}`} onClick={() => setActiveTab('vertex')}>Vertex</button>
